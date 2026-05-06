@@ -282,6 +282,18 @@ export default function GraficoVendasMensais({
     buscar();
   }, [vendedor]);
 
+  // ── Hooks devem ficar ANTES de qualquer return antecipado ───
+  // Se projecaoMesAtual informado, sobrepõe a barra do mês parcial com a projeção de fechamento
+  const dadosExibidos = useMemo(() => {
+    if (!dados || dados.length === 0) return dados;
+    if (projecaoMesAtual === null) return dados;
+    return dados.map(d =>
+      d.parcial
+        ? { ...d, faturamento: Math.round(projecaoMesAtual), projetado: true, fatReal: d.faturamento }
+        : d
+    );
+  }, [dados, projecaoMesAtual]);
+
   // ── Render ────────────────────────────────────────────────
   if (carregando) {
     return (
@@ -291,18 +303,7 @@ export default function GraficoVendasMensais({
     );
   }
 
-  if (!dados || dados.length === 0) return null;
-
-  // Se projecaoMesAtual informado, sobrepõe a barra do mês parcial com a projeção de fechamento
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const dadosExibidos = useMemo(() => {
-    if (!dados || projecaoMesAtual === null) return dados;
-    return dados.map(d =>
-      d.parcial
-        ? { ...d, faturamento: Math.round(projecaoMesAtual), projetado: true, fatReal: d.faturamento }
-        : d
-    );
-  }, [dados, projecaoMesAtual]);
+  if (!dadosExibidos || dadosExibidos.length === 0) return null;
 
   const temTendencia = dadosExibidos.some(d => d.tendencia !== null);
 
