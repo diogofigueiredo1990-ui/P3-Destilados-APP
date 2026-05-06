@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
 import { hojeISO, dataParaISO } from '../utils/data';
@@ -542,11 +542,6 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
   const [metricasNivel, setMetricasNivel]           = useState(null);
   const [metricasVendedores, setMetricasVendedores] = useState(null);
   const [lideres, setLideres]                       = useState(null); // líderes por produto
-  const [clientesDoMes, setClientesDoMes]           = useState(0);
-  const [pedidosResp, setPedidosResp]               = useState([]); // pedidos do mês via vendedorResponsavel
-  const [pedidosJanela, setPedidosJanela]           = useState([]); // pedidos na janela [mês-30d, fimMês] para progressão
-  const [pedidosRespJanela, setPedidosRespJanela]   = useState([]); // idem via vendedorResponsavel
-  const [financeiroJanela, setFinanceiroJanela]     = useState({}); // financeiro da janela
   const [progressaoNivel, setProgressaoNivel]       = useState(null); // { diasPorNivel, nivelMaioria, totalDias }
   const [nivelExpanded, setNivelExpanded]           = useState(false);
 
@@ -644,316 +639,203 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
     buscarClientesDoVendedor();
   }, [nome]);
 
-  // Métricas dos últimos 30 dias corridos — cache semanal (atualiza toda segunda-feira)
+  // Nível do dia — lê diretamente do snapshot pré-calculado (niveis_diarios)
   useEffect(() => {
     if (!nome) return;
-
-    const cacheKey = 'p3_nivel_' + nome.toLowerCase().replace(/\s+/g, '_');
-    const cached   = lerCacheDiario(cacheKey);
-    if (cached) { setMetricasNivel(cached); return; }
-
-    const dataInicio = ultimos30dias();
-    const dataFim    = hojeISO();
-
-    async function buscarMetricasNivel() {
+    async function buscarNivelHoje() {
       try {
-        // Fat/com/inadimplência: pedidos onde este vendedor fez a venda (recebe comissão)
-        const snapVend = await getDocs(query(collection(db, 'pedidos'), where('vendedor', '==', nome)));
-        const pedRef = snapVend.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .filter((p) => { const dv = p.dataVenda || ''; return dv >= dataInicio && dv <= dataFim; });
-
-        const totalFatRef = pedRef.reduce((s, p) => s + Number(p.faturamento || 0), 0);
-        const totalComRef = pedRef.reduce((s, p) => s + Number(p.comissao    || 0), 0);
-
-        // Clientes: pedidos onde este vendedor é o responsável pela conta
-        const snapResp = await getDocs(query(collection(db, 'pedidos'), where('vendedorResponsavel', '==', nome)));
-        const pedResp = snapResp.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .filter((p) => { const dv = p.dataVenda || ''; return dv >= dataInicio && dv <= dataFim; });
-        const cnpjsUnicos       = [...new Set(pedResp.map((p) => normalizarCnpj(p.cnpj) || p.cliente).filter(Boolean))];
-        const clientesAtivosRef = cnpjsUnicos.length;
-        const fatPorClienteRef  = clientesAtivosRef > 0 ? totalFatRef / clientesAtivosRef : 0;
-
-        // Inadimplência: vencidos / total das vendas do vendedor
-        const finRef     = await buscarFinanceiro(pedRef);
-        const fatBloqRef = pedRef
-          .filter((p) => finRef[finId(p)]?.statusGeral === 'ATRASADO')
-          .reduce((s, p) => s + Number(p.faturamento || 0), 0);
-        const inadimplenciaRef = totalFatRef > 0 ? fatBloqRef / totalFatRef : 0;
-
-        const metricas = {
-          totalFat:       totalFatRef,
-          totalCom:       totalComRef,
-          clientesAtivos: clientesAtivosRef,
-          fatPorCliente:  fatPorClienteRef,
-          inadimplencia:  inadimplenciaRef,
-          dataInicio,
-          dataFim,
-        };
-        salvarCacheDiario(cacheKey, metricas);
-        setMetricasNivel(metricas);
+        const slug   = nome.toLowerCase().replace(/\s+/g, '_');
+        const snap   = await getDoc(doc(db, 'niveis_diarios', `${slug}_${hojeISO()}`));
+        if (snap.exists()) {
+          const d = snap.data();
+          setMetricasNivel({
+            totalFat:       d.totalFat,
+            totalCom:       d.totalCom,
+            clientesAtivos: d.clientesAtivos,
+            fatPorCliente:  d.fatPorCliente,
+            inadimplencia:  (d.inadimplenciaPercent ?? 0) / 100, // armazena %; componente espera ratio
+            dataFim:        hojeISO(),
+          });
+        }
       } catch (err) {
-        console.error('Erro ao buscar métricas do nível:', err);
+        console.error('Erro ao buscar nível do dia:', err);
       }
     }
-    buscarMetricasNivel();
+    buscarNivelHoje();
   }, [nome]);
 
-  // Calcula métricas de todos os vendedores (pódio) e líderes por produto — cache semanal
+  // Pódio — lê snapshots de hoje do Firestore (pré-calculados pela Cloud Function)
   useEffect(() => {
-    async function calcularMetricasPodium() {
+    async function buscarPodium() {
       try {
-        const cachedPodium  = lerCache('p3_podium');
-        const cachedLideres = lerCache('p3_categorias_v2');
-        if (cachedPodium)  setMetricasVendedores(cachedPodium);
-        if (cachedLideres) setLideres(cachedLideres);
-        if (cachedPodium && cachedLideres) return;
+        const snap = await getDocs(
+          query(collection(db, 'niveis_diarios'), where('data', '==', hojeISO()))
+        );
+        if (snap.empty) { setMetricasVendedores([]); return; }
+        const metricas = snap.docs.map(d => {
+          const r = d.data();
+          return {
+            id:                   r.vendedor,
+            vendedor:             r.vendedor,
+            totalFat:             r.totalFat,
+            comissaoPercent:      r.comissaoPercent,
+            inadimplenciaPercent: r.inadimplenciaPercent,
+            clientesAtivos:       r.clientesAtivos,
+            fatPorCliente:        r.fatPorCliente,
+          };
+        });
+        setMetricasVendedores(metricas);
+      } catch (err) {
+        console.error('Erro ao buscar pódio:', err);
+        setMetricasVendedores([]);
+      }
+    }
+    buscarPodium();
+  }, []);
 
-        const dataInicio = ultimos30dias();
-        const dataFim    = hojeISO();
+  // Líderes por categoria — cache semanal, sem necessidade de dados financeiros
+  useEffect(() => {
+    const cachedLideres = lerCache('p3_categorias_v2');
+    if (cachedLideres) { setLideres(cachedLideres); return; }
 
+    async function calcularLideres() {
+      try {
         const snap = await getDocs(
           query(collection(db, 'pedidos'),
-            where('dataVenda', '>=', dataInicio),
-            where('dataVenda', '<=', dataFim),
+            where('dataVenda', '>=', ultimos30dias()),
+            where('dataVenda', '<=', hojeISO()),
           )
         );
-        const pedPeriodo = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const pedPeriodo = snap.docs.map(d => ({ ...d.data() }));
 
-        // ── Agrupa por vendedor → fat / com ─────────────────────────────
-        const porVendedor = {};
-        pedPeriodo.forEach(p => {
-          const v = String(p.vendedor || '').trim();
-          if (v) {
-            if (!porVendedor[v]) porVendedor[v] = [];
-            porVendedor[v].push(p);
-          }
-        });
-
-        // ── Totais de faturamento por vendedor (para cálculo de % por produto)
         const fatTotalVendedor = {};
-        Object.entries(porVendedor).forEach(([v, peds]) => {
-          fatTotalVendedor[v] = peds.reduce((s, p) => s + Number(p.faturamento || 0), 0);
-        });
-
-        // ── Agrupa por vendedorResponsavel → clientes ativos ─────────────
-        const cnpjsPorResp = {};
+        const porProduto = {};
         pedPeriodo.forEach(p => {
-          const v    = String(p.vendedorResponsavel || '').trim();
-          const cnpj = normalizarCnpj(p.cnpj) || p.cliente;
-          if (v && cnpj) {
-            if (!cnpjsPorResp[v]) cnpjsPorResp[v] = new Set();
-            cnpjsPorResp[v].add(cnpj);
-          }
+          const v   = String(p.vendedor || '').trim();
+          const cat = String(p.categoriaProduto || '').trim();
+          if (!v) return;
+          fatTotalVendedor[v] = (fatTotalVendedor[v] || 0) + Number(p.faturamento || 0);
+          if (!cat) return;
+          if (!porProduto[cat]) porProduto[cat] = { totalFat: 0, vendedores: {} };
+          porProduto[cat].totalFat += Number(p.faturamento || 0);
+          porProduto[cat].vendedores[v] = (porProduto[cat].vendedores[v] || 0) + Number(p.faturamento || 0);
         });
 
-        const finMap = await buscarFinanceiro(pedPeriodo);
+        const novoLideres = Object.entries(porProduto)
+          .filter(([, d]) => d.totalFat >= 1000)
+          .map(([categoria, d]) => {
+            let destaqueVendedor = null, destaquePercent = 0;
+            const pctPorVendedor = {};
+            Object.entries(d.vendedores).forEach(([v, fatProd]) => {
+              const fatTotal = fatTotalVendedor[v] || 0;
+              if (fatTotal < 20000) return;
+              const pct = (fatProd / fatTotal) * 100;
+              pctPorVendedor[v] = pct;
+              if (pct > destaquePercent) { destaquePercent = pct; destaqueVendedor = v; }
+            });
+            return { categoria, totalFat: d.totalFat, destaqueVendedor, destaquePercent, pctPorVendedor };
+          })
+          .sort((a, b) => b.totalFat - a.totalFat);
 
-        // ── Métricas do pódio ────────────────────────────────────────────
-        if (!cachedPodium) {
-          const metricas = Object.entries(porVendedor).map(([vendedor, peds]) => {
-            const totalFat       = peds.reduce((s, p) => s + Number(p.faturamento || 0), 0);
-            const totalCom       = peds.reduce((s, p) => s + Number(p.comissao    || 0), 0);
-            const clientesAtivos = cnpjsPorResp[vendedor]?.size ?? 0;
-            const fatPorCliente  = clientesAtivos > 0 ? totalFat / clientesAtivos : 0;
-            const fatBloq        = peds
-              .filter(p => finMap[finId(p)]?.statusGeral === 'ATRASADO')
-              .reduce((s, p) => s + Number(p.faturamento || 0), 0);
-            const comissaoPercent      = totalFat > 0 ? (totalCom / totalFat) * 100 : 0;
-            const inadimplenciaPercent = totalFat > 0 ? (fatBloq  / totalFat) * 100 : 0;
-            return { id: vendedor, vendedor, totalFat, comissaoPercent, inadimplenciaPercent, clientesAtivos, fatPorCliente };
-          });
-          salvarCache('p3_podium', metricas);
-          setMetricasVendedores(metricas);
-        }
-
-        // ── Líderes por produto ──────────────────────────────────────────
-        if (!cachedLideres) {
-          // fat por produto e fat por produto×vendedor
-          const porProduto = {}; // produto → { totalFat, vendedores: { nome → fat } }
-          pedPeriodo.forEach(p => {
-            const categoria = String(p.categoriaProduto || '').trim();
-            const vendedor  = String(p.vendedor || '').trim();
-            if (!categoria || !vendedor) return;
-            if (!porProduto[categoria]) porProduto[categoria] = { totalFat: 0, vendedores: {} };
-            porProduto[categoria].totalFat += Number(p.faturamento || 0);
-            porProduto[categoria].vendedores[vendedor] = (porProduto[categoria].vendedores[vendedor] || 0) + Number(p.faturamento || 0);
-          });
-
-          const novoLideres = Object.entries(porProduto)
-            .filter(([, d]) => d.totalFat >= 1000)
-            .map(([categoria, d]) => {
-              let destaqueVendedor = null;
-              let destaquePercent  = 0;
-              // pct por vendedor (apenas os com volume >= 20k) — usado para o insight
-              const pctPorVendedor = {};
-              Object.entries(d.vendedores).forEach(([v, fatProd]) => {
-                const fatTotal = fatTotalVendedor[v] || 0;
-                if (fatTotal < 20000) return;
-                const pct = (fatProd / fatTotal) * 100;
-                pctPorVendedor[v] = pct;
-                if (pct > destaquePercent) { destaquePercent = pct; destaqueVendedor = v; }
-              });
-              return { categoria, totalFat: d.totalFat, destaqueVendedor, destaquePercent, pctPorVendedor };
-            })
-            .sort((a, b) => b.totalFat - a.totalFat);
-
-          salvarCache('p3_categorias_v2', novoLideres);
-          setLideres(novoLideres);
-        }
-
+        salvarCache('p3_categorias_v2', novoLideres);
+        setLideres(novoLideres);
       } catch (err) {
-        console.error('Erro ao calcular métricas do pódio:', err);
-        setMetricasVendedores([]);
+        console.error('Erro ao calcular líderes:', err);
         setLideres([]);
       }
     }
-    calcularMetricasPodium();
+    calcularLideres();
   }, []);
 
-  // Calcula progressão de nível dia a dia no mês selecionado
-  // Para cada dia D: nível = resultado dos ÚLTIMOS 30 DIAS a partir de D
+  // Progressão de nível do mês — lê snapshots diários pré-calculados
   useEffect(() => {
-    if (carregando || !pedidosJanela.length) return;
+    if (!nome) return;
+    setProgressaoNivel(null);
 
-    const hj             = new Date();
-    const isCurrentMonth = ano === hj.getFullYear() && mes === hj.getMonth() + 1;
-    const diasNoMes      = new Date(ano, mes, 0).getDate();
-    const lastDay        = isCurrentMonth ? hj.getDate() : diasNoMes;
+    async function buscarProgressao() {
+      try {
+        const inicio = `${ano}-${String(mes).padStart(2, '0')}-01`;
+        const fim    = `${ano}-${String(mes).padStart(2, '0')}-31`;
+        const snap   = await getDocs(
+          query(collection(db, 'niveis_diarios'),
+            where('vendedor', '==', nome),
+            where('data',     '>=', inicio),
+            where('data',     '<=', fim),
+          )
+        );
+        if (snap.empty) return;
 
-    const nivelPorDia = [];
-    for (let d = 1; d <= lastDay; d++) {
-      const dStr    = `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      const d30Date = new Date(ano, mes - 1, d);
-      d30Date.setDate(d30Date.getDate() - 30);
-      const d30Str  = dataParaISO(d30Date);
+        const hj             = new Date();
+        const isCurrentMonth = ano === hj.getFullYear() && mes === hj.getMonth() + 1;
+        const lastDay        = isCurrentMonth ? hj.getDate() : new Date(ano, mes, 0).getDate();
 
-      // Pedidos do vendedor nos últimos 30 dias a partir de D
-      const pedD = pedidosJanela.filter(p => {
-        const dv = p.dataVenda || '';
-        return dv >= d30Str && dv <= dStr;
-      });
-      if (!pedD.length) { nivelPorDia.push(null); continue; }
+        const diasPorNivel = {};
+        let totalDias = 0;
+        snap.docs.forEach(d => {
+          const r   = d.data();
+          const dia = parseInt((r.data || '').split('-')[2], 10);
+          if (dia > lastDay) return;
+          const k = r.nivel ?? '—';
+          diasPorNivel[k] = (diasPorNivel[k] || 0) + 1;
+          totalDias++;
+        });
 
-      const fat = pedD.reduce((s, p) => s + Number(p.faturamento || 0), 0);
-      const com = pedD.reduce((s, p) => s + Number(p.comissao    || 0), 0);
+        // Nível majoritário: mais dias; empate → nível mais alto
+        let nivelMaioria = null, maxDias = 0;
+        Object.entries(diasPorNivel).forEach(([k, cnt]) => {
+          if (k === '—') return;
+          const idx     = NIVEIS_COMERCIAIS.findIndex(n => n.nivel === k);
+          const prevIdx = nivelMaioria ? NIVEIS_COMERCIAIS.findIndex(n => n.nivel === nivelMaioria.nivel) : -1;
+          if (cnt > maxDias || (cnt === maxDias && idx > prevIdx)) {
+            maxDias = cnt;
+            nivelMaioria = NIVEIS_COMERCIAIS[idx];
+          }
+        });
 
-      // Clientes ativos via vendedorResponsavel nos mesmos 30 dias
-      const cliD = new Set(
-        pedidosRespJanela
-          .filter(p => { const dv = p.dataVenda || ''; return dv >= d30Str && dv <= dStr; })
-          .map(p => normalizarCnpj(p.cnpj) || p.cliente)
-          .filter(Boolean)
-      ).size;
-
-      const fatBloqD = pedD
-        .filter(p => financeiroJanela[finId(p)]?.statusGeral === 'ATRASADO')
-        .reduce((s, p) => s + Number(p.faturamento || 0), 0);
-
-      const comPct  = fat > 0 ? (com / fat) * 100 : 0;
-      const inadPct = fat > 0 ? (fatBloqD / fat) * 100 : 0;
-      const fatCli  = cliD > 0 ? fat / cliD : 0;
-
-      const n = [...NIVEIS_COMERCIAIS].reverse().find(n =>
-        comPct  >= n.comissaoMinima    &&
-        inadPct <= n.inadimplenciaMax  &&
-        cliD    >= n.clientesAtivosMin &&
-        fatCli  >= n.fatPorClienteMin
-      );
-      nivelPorDia.push(n?.nivel ?? null);
-    }
-
-    const diasPorNivel = {};
-    nivelPorDia.forEach(n => {
-      const k = n ?? '—';
-      diasPorNivel[k] = (diasPorNivel[k] || 0) + 1;
-    });
-
-    // Nível majoritário: mais dias; empate → nível mais alto
-    let nivelMaioria = null;
-    let maxDias = 0;
-    Object.entries(diasPorNivel).forEach(([k, cnt]) => {
-      if (k === '—') return;
-      const idx     = NIVEIS_COMERCIAIS.findIndex(n => n.nivel === k);
-      const prevIdx = nivelMaioria ? NIVEIS_COMERCIAIS.findIndex(n => n.nivel === nivelMaioria.nivel) : -1;
-      if (cnt > maxDias || (cnt === maxDias && idx > prevIdx)) {
-        maxDias = cnt;
-        nivelMaioria = NIVEIS_COMERCIAIS[idx];
+        setProgressaoNivel({ diasPorNivel, nivelMaioria, totalDias });
+      } catch (err) {
+        console.error('Erro ao buscar progressão de nível:', err);
       }
-    });
-
-    setProgressaoNivel({ diasPorNivel, nivelMaioria, totalDias: lastDay });
-  }, [pedidosJanela, pedidosRespJanela, financeiroJanela, mes, ano, carregando]);
+    }
+    buscarProgressao();
+  }, [nome, mes, ano]);
 
   useEffect(() => {
     setFiltroAtrasado(false);
     setExpandidos(new Set());
-    setProgressaoNivel(null);
     setNivelExpanded(false);
-    setPedidosJanela([]);
-    setPedidosRespJanela([]);
-    setFinanceiroJanela({});
     if (!nome) return;
     async function buscar() {
       setCarregando(true);
       try {
-        const q = query(collection(db, 'pedidos'), where('vendedor', '==', nome));
-        const snap = await getDocs(q);
         const prefixo = `${ano}-${String(mes).padStart(2, '0')}`;
 
-        // Todos os pedidos do vendedor (sem filtro de data — já vem do Firestore)
-        const todos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-        // Extrato: apenas o mês selecionado
-        const filtrados = todos
-          .filter((p) => (p.dataVenda || '').startsWith(prefixo))
+        // Extrato do mês selecionado — query direta com filtro de data
+        const snap = await getDocs(
+          query(collection(db, 'pedidos'),
+            where('vendedor',  '==', nome),
+            where('dataVenda', '>=', `${prefixo}-01`),
+            where('dataVenda', '<=', `${prefixo}-31`),
+          )
+        );
+        const filtrados = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
           .sort((a, b) => (b.dataVenda || '').localeCompare(a.dataVenda || ''));
         setPedidos(filtrados);
 
-        // Janela para progressão de nível: [1º dia do mês − 30 dias, último dia do mês]
-        const janelaStartDate = new Date(ano, mes - 1, 1);
-        janelaStartDate.setDate(janelaStartDate.getDate() - 30);
-        const janelaStart = dataParaISO(janelaStartDate);
-        const janelaEnd   = `${ano}-${String(mes).padStart(2, '0')}-${String(new Date(ano, mes, 0).getDate()).padStart(2, '0')}`;
-        const janela = todos.filter((p) => {
-          const dv = p.dataVenda || '';
-          return dv >= janelaStart && dv <= janelaEnd;
-        });
-        setPedidosJanela(janela);
-
-        const [fin, cli, snapPag, snapResp, finJanela] = await Promise.all([
+        const [fin, cli, snapPag] = await Promise.all([
           buscarFinanceiro(filtrados),
           buscarClientes([...new Set(filtrados.map((p) => normalizarCnpj(p.cnpj)).filter(Boolean))]),
           getDocs(query(collection(db, 'pagamentosComissao'), where('vendedor', '==', nome))),
-          getDocs(query(collection(db, 'pedidos'), where('vendedorResponsavel', '==', nome))),
-          buscarFinanceiro(janela),
         ]);
         setFinanceiro(fin);
         setClientes(cli);
-        setFinanceiroJanela(finJanela);
 
         const pago = snapPag.docs
           .map((d) => d.data())
           .filter((p) => p.mes === mes && p.ano === ano)
           .reduce((s, p) => s + Number(p.valor || 0), 0);
         setTotalPago(pago);
-
-        // Pedidos via vendedorResponsavel — janela completa e filtro do mês
-        const todosResp = snapResp.docs.map((d) => d.data());
-        const respJanela = todosResp.filter((p) => {
-          const dv = p.dataVenda || '';
-          return dv >= janelaStart && dv <= janelaEnd;
-        });
-        setPedidosRespJanela(respJanela);
-
-        const respMes = respJanela.filter((p) => (p.dataVenda || '').startsWith(prefixo));
-        setPedidosResp(respMes);
-
-        const cliMes = new Set(
-          respMes.map((p) => normalizarCnpj(p.cnpj) || p.cliente).filter(Boolean)
-        ).size;
-        setClientesDoMes(cliMes);
       } catch (err) {
         console.error(err);
       } finally {
