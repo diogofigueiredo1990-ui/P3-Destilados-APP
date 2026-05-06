@@ -275,7 +275,7 @@ function ClienteCard({ cliente }) {
         <p style={{ margin: 0, fontSize: '12px', color: '#6b7280', fontStyle: 'italic' }}>{cliente.orientacaoVenda}</p>
       )}
       {cliente.cnpj && (
-        <span style={{ fontSize: '11px', color: '#d1d5db' }}>CNPJ: {cliente.cnpj}</span>
+        <span style={{ fontSize: '12px', color: '#9ca3af' }}>CNPJ: {cliente.cnpj}</span>
       )}
     </div>
   );
@@ -364,9 +364,9 @@ function RankingNiveis({ metricasVendedores, vendedorAtual }) {
 
   // Estilos de cada degrau (0=ouro, 1=prata, 2=bronze)
   const STEP = [
-    { h: 52, bg: 'linear-gradient(170deg,#fef9c3 0%,#fbbf24 100%)', border: '#f59e0b', shadow: '#fbbf2440', medal: '🥇', sz: '18px' },
-    { h: 38, bg: 'linear-gradient(170deg,#f1f5f9 0%,#94a3b8 100%)', border: '#94a3b8', shadow: '#94a3b840', medal: '🥈', sz: '15px' },
-    { h: 26, bg: 'linear-gradient(170deg,#fde68a 0%,#b45309 100%)', border: '#b45309', shadow: '#b4530940', medal: '🥉', sz: '13px' },
+    { h: 72, bg: 'linear-gradient(170deg,#fef9c3 0%,#fbbf24 100%)', border: '#f59e0b', shadow: '#fbbf2440', medal: '🥇', sz: '26px' },
+    { h: 56, bg: 'linear-gradient(170deg,#f1f5f9 0%,#94a3b8 100%)', border: '#94a3b8', shadow: '#94a3b840', medal: '🥈', sz: '22px' },
+    { h: 44, bg: 'linear-gradient(170deg,#fde68a 0%,#b45309 100%)', border: '#b45309', shadow: '#b4530940', medal: '🥉', sz: '18px' },
   ];
 
   // Ordem de exibição: 2° esquerda · 1° centro · 3° direita
@@ -378,7 +378,7 @@ function RankingNiveis({ metricasVendedores, vendedorAtual }) {
         <p style={{ margin: 0, fontSize: '11px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           🏆 Ranking · últimos 30 dias
         </p>
-        <span style={{ fontSize: '10px', color: '#9ca3af' }}>
+        <span style={{ fontSize: '12px', color: '#9ca3af' }}>
           📅 Atualiza toda segunda · próx. {proximaSegunda()}
         </span>
       </div>
@@ -407,8 +407,8 @@ function RankingNiveis({ metricasVendedores, vendedorAtual }) {
             <div key={c.campoM}>
               {/* Título */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '10px' }}>
-                <span style={{ fontSize: '12px' }}>{c.icone}</span>
-                <span style={{ fontSize: '10px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{c.label}</span>
+                <span style={{ fontSize: '16px' }}>{c.icone}</span>
+                <span style={{ fontSize: '14px', fontWeight: '700', color: '#374151' }}>{c.label}</span>
               </div>
 
               {/* Pódio */}
@@ -437,7 +437,7 @@ function RankingNiveis({ metricasVendedores, vendedorAtual }) {
                             {names.slice(0, 3).map((n, i) => (
                               <div key={i} style={{ flex: 1, textAlign: 'center', overflow: 'hidden' }}>
                                 <div style={{
-                                  fontSize: '9px', lineHeight: 1.3,
+                                  fontSize: '13px', lineHeight: 1.3,
                                   fontWeight: n.isMe ? '700' : '500',
                                   color: n.isMe ? '#1d4ed8' : '#374151',
                                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -445,8 +445,8 @@ function RankingNiveis({ metricasVendedores, vendedorAtual }) {
                                   {n.first}{n.isMe ? ' 👤' : ''}
                                 </div>
                                 <div style={{
-                                  fontSize: '8px', lineHeight: 1.2,
-                                  color: n.isMe ? '#3b82f6' : '#9ca3af',
+                                  fontSize: '12px', lineHeight: 1.3,
+                                  color: n.isMe ? '#3b82f6' : '#6b7280',
                                   fontWeight: '500',
                                 }}>
                                   {c.fmt(n.val)}
@@ -454,13 +454,13 @@ function RankingNiveis({ metricasVendedores, vendedorAtual }) {
                               </div>
                             ))}
                             {names.length > 3 && (
-                              <div style={{ flex: 1, textAlign: 'center', fontSize: '9px', color: '#9ca3af' }}>+{names.length - 3}</div>
+                              <div style={{ flex: 1, textAlign: 'center', fontSize: '12px', color: '#9ca3af' }}>+{names.length - 3}</div>
                             )}
                           </div>
 
                           {/* Nível (único por degrau) */}
-                          <div style={{ textAlign: 'center', fontSize: '10px', fontWeight: '800', color: isMeHere ? '#1d4ed8' : '#0f3460', marginBottom: '4px', lineHeight: 1 }}>
-                            {nivel != null ? `Nv ${nivel}` : '—'}
+                          <div style={{ textAlign: 'center', fontSize: '13px', fontWeight: '800', color: isMeHere ? '#1d4ed8' : '#0f3460', marginBottom: '6px', lineHeight: 1 }}>
+                            {nivel != null ? `Nível ${nivel}` : '—'}
                           </div>
 
                           {/* Degrau */}
@@ -498,12 +498,12 @@ function RankingNiveis({ metricasVendedores, vendedorAtual }) {
                 const me    = groups[myGroup].find(s => normalizarVendedor(s.nome) === nomeNorm) || groups[myGroup][0];
                 const nivel = me.idx >= 0 ? NIVEIS_COMERCIAIS[me.idx].nivel : null;
                 return (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#eff6ff', borderRadius: '5px', padding: '4px 8px' }}>
-                    <span style={{ fontSize: '10px', color: '#1d4ed8', fontWeight: '700' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#eff6ff', borderRadius: '8px', padding: '8px 12px' }}>
+                    <span style={{ fontSize: '13px', color: '#1d4ed8', fontWeight: '700' }}>
                       {myGroup + 1}° {normalizarVendedor(me.nome).split(' ')[0]} 👤
                     </span>
-                    <span style={{ fontSize: '11px', fontWeight: '800', color: '#1d4ed8' }}>
-                      {nivel ? `Nv ${nivel}` : '—'}
+                    <span style={{ fontSize: '14px', fontWeight: '800', color: '#1d4ed8' }}>
+                      {nivel ? `Nível ${nivel}` : '—'}
                     </span>
                   </div>
                 );
@@ -1387,8 +1387,8 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
                           {/* Detalhes */}
                           <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: '#6b7280', flexWrap: 'wrap' }}>
                             {c.cidade && <span>{c.cidade}</span>}
-                            {c.fatMedioMensal > 0 && <span>FMM: <strong style={{ color: '#111827' }}>{moeda(c.fatMedioMensal)}</strong></span>}
-                            {c.pontuacao > 0 && <span>Pont: {moeda(c.pontuacao)}</span>}
+                            {c.fatMedioMensal > 0 && <span>Fat. médio/mês: <strong style={{ color: '#111827' }}>{moeda(c.fatMedioMensal)}</strong></span>}
+                            {c.pontuacao > 0 && <span>Pontuação: {moeda(c.pontuacao)}</span>}
                             {c.score != null && <span>Score: {c.score}</span>}
                           </div>
                         </div>
@@ -1599,7 +1599,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
               <p style={{ margin: 0, fontSize: '11px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 🥇 Líder de Vendas por Categoria · últimos 30 dias
               </p>
-              <span style={{ fontSize: '10px', color: '#9ca3af' }}>
+              <span style={{ fontSize: '12px', color: '#9ca3af' }}>
                 📅 Atualiza toda segunda · próx. {proximaSegunda()}
               </span>
             </div>
@@ -1708,12 +1708,12 @@ const styles = {
   produtoFat: { fontSize: '12px', color: '#6b7280' },
   produtoCom: { fontSize: '13px', fontWeight: '600' },
   // compartilhados
-  itemComissao: { fontWeight: '700', fontSize: '16px' },
-  itemPercent: { fontSize: '11px', color: '#9ca3af' },
-  itemInfo: { fontSize: '12px', color: '#9ca3af' },
-  badge: { fontSize: '11px', padding: '2px 8px', borderRadius: '20px', background: '#e0f2fe', color: '#0369a1', fontWeight: '600' },
-  badgeStatus: { fontSize: '11px', padding: '2px 8px', borderRadius: '20px', fontWeight: '600' },
-  badgeDias: { fontSize: '11px', padding: '2px 8px', borderRadius: '20px', background: '#fee2e2', color: '#dc2626', fontWeight: '600' },
+  itemComissao: { fontWeight: '700', fontSize: '17px' },
+  itemPercent: { fontSize: '13px', color: '#6b7280' },
+  itemInfo: { fontSize: '13px', color: '#6b7280' },
+  badge: { fontSize: '13px', padding: '4px 10px', borderRadius: '20px', background: '#e0f2fe', color: '#0369a1', fontWeight: '600' },
+  badgeStatus: { fontSize: '13px', padding: '4px 10px', borderRadius: '20px', fontWeight: '600' },
+  badgeDias: { fontSize: '13px', padding: '4px 10px', borderRadius: '20px', background: '#fee2e2', color: '#dc2626', fontWeight: '600' },
   centralizando: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '60px 0', gap: '12px' },
   spinner: { width: '32px', height: '32px', border: '3px solid #e5e7eb', borderTop: '3px solid #0f3460', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
   vazio: { textAlign: 'center', padding: '60px 0', color: '#6b7280', background: '#fff', borderRadius: '12px' },

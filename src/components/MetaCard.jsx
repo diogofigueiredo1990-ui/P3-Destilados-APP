@@ -143,10 +143,10 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
   const progresso = Math.min((fatAtual / crescMod) * 100, 100);
 
   const markers = [
-    { v: queda,      label: 'Queda',   cor: '#dc2626' },
-    { v: estab,      label: 'Estab.',  cor: '#d97706' },
-    { v: crescMod,   label: 'Meta ★',  cor: '#16a34a' },
-    { v: crescAcent, label: 'Acent.',  cor: '#0f3460' },
+    { v: queda,      label: 'Queda',        cor: '#dc2626' },
+    { v: estab,      label: 'Estabilidade', cor: '#d97706' },
+    { v: crescMod,   label: 'Meta ★',       cor: '#16a34a' },
+    { v: crescAcent, label: 'Acentuado',    cor: '#0f3460' },
   ];
 
   // Altura do espaço acima da régua (para os marcadores ficarem visíveis)
@@ -196,7 +196,7 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
                 <div style={{ width: '10px', height: '2px', background: m.cor, flexShrink: 0 }} />
                 <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
                   <span style={{ fontSize: '11px', fontWeight: '700', color: m.cor, whiteSpace: 'nowrap' }}>{m.label}</span>
-                  {isMeta && <span style={{ fontSize: '10px', fontWeight: '600', color: m.cor }}>{moeda(crescMod)}</span>}
+                  {isMeta && <span style={{ fontSize: '12px', fontWeight: '600', color: m.cor }}>{moeda(crescMod)}</span>}
                 </div>
               </div>
             );
@@ -309,10 +309,10 @@ const s = {
   badge:       { fontSize: '12px', fontWeight: '700', padding: '4px 10px', borderRadius: '20px' },
   hist:        { display: 'flex', gap: '20px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'baseline' },
   histItem:    { display: 'flex', flexDirection: 'column', gap: '1px' },
-  histMes:     { fontSize: '10px', color: '#9ca3af', fontWeight: '600', textTransform: 'uppercase' },
+  histMes:     { fontSize: '12px', color: '#9ca3af', fontWeight: '600', textTransform: 'uppercase' },
   histVal:     { fontSize: '13px', color: '#374151', fontWeight: '500' },
   resumo:      { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '12px', marginBottom: '16px' },
   resumoItem:  { display: 'flex', flexDirection: 'column', gap: '2px' },
-  resumoLabel: { fontSize: '10px', color: '#9ca3af', fontWeight: '600', textTransform: 'uppercase' },
+  resumoLabel: { fontSize: '12px', color: '#6b7280', fontWeight: '600', textTransform: 'uppercase' },
   resumoValor: { fontSize: '18px', fontWeight: '700', color: '#111827' },
 };
