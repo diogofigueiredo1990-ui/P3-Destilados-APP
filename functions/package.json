@@ -1,7 +1,7 @@
 {
   "name": "functions",
   "description": "Cloud Functions — cálculo diário de nível dos vendedores",
-  "engines": { "node": "18" },
+  "engines": { "node": "22" },
   "main": "index.js",
   "scripts": {
     "serve": "firebase emulators:start --only functions",
