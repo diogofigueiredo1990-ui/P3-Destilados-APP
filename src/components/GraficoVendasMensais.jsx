@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { hojeISO, dataParaISO } from '../utils/data';
 import {
   ComposedChart, Bar, Line,
   XAxis, YAxis, CartesianGrid,
@@ -13,12 +14,12 @@ function lerCacheGrafico(key) {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const obj = JSON.parse(raw);
-    return obj.dia === new Date().toISOString().slice(0, 10) ? obj.data : null;
+    return obj.dia === hojeISO() ? obj.data : null;
   } catch { return null; }
 }
 function salvarCacheGrafico(key, data) {
   try {
-    localStorage.setItem(key, JSON.stringify({ dia: new Date().toISOString().slice(0, 10), data }));
+    localStorage.setItem(key, JSON.stringify({ dia: hojeISO(), data }));
   } catch {}
 }
 
@@ -211,8 +212,8 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
 
         const hoje      = new Date();
         const inicio    = new Date(hoje.getFullYear(), hoje.getMonth() - 11, 1);
-        const inicioStr = inicio.toISOString().slice(0, 10);
-        const fimStr    = hoje.toISOString().slice(0, 10);
+        const inicioStr = dataParaISO(inicio);
+        const fimStr    = dataParaISO(hoje);
 
         let snap;
         if (vendedor) {

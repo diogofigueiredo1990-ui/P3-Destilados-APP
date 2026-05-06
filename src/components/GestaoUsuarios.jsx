@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { collection, getDocs, setDoc, updateDoc, doc } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { db, auth } from '../firebase/config';
+import { hojeISO } from '../utils/data';
 
 // ── Labels e cores por perfil ─────────────────────────────────
 const PERFIL_LABEL = { vendedor: 'Vendedor', admin: 'Admin', financeiro: 'Financeiro' };
@@ -109,7 +110,7 @@ export default function GestaoUsuarios({ usuarioLogadoUID }) {
         email:    form.email,
         perfil:   form.perfil,
         ativo:    true,
-        criadoEm: new Date().toISOString().slice(0, 10),
+        criadoEm: hojeISO(),
         ...(form.perfil === 'vendedor' ? { vendedor: form.vendedor } : {}),
       };
       await setDoc(doc(db, 'usuarios', uid), perfil);

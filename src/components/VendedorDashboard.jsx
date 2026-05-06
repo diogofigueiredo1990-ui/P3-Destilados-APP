@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
+import { hojeISO, dataParaISO } from '../utils/data';
 import MetaCard from './MetaCard';
 import GraficoVendasMensais from './GraficoVendasMensais';
 import LinhaDoTempo from './LinhaDoTempo';
@@ -53,7 +54,7 @@ function compacto(v) {
 function ultimos30dias() {
   const d = new Date();
   d.setDate(d.getDate() - 30);
-  return d.toISOString().slice(0, 10);
+  return dataParaISO(d);
 }
 
 // Chave de cache = data da segunda-feira desta semana
@@ -62,7 +63,7 @@ function chaveSemana() {
   const d   = new Date();
   const dow = d.getDay(); // 0=Dom, 1=Seg…
   d.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
-  return d.toISOString().slice(0, 10);
+  return dataParaISO(d);
 }
 
 function lerCache(key) {
@@ -86,13 +87,13 @@ function lerCacheDiario(key) {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const obj = JSON.parse(raw);
-    return obj.dia === new Date().toISOString().slice(0, 10) ? obj.data : null;
+    return obj.dia === hojeISO() ? obj.data : null;
   } catch { return null; }
 }
 
 function salvarCacheDiario(key, data) {
   try {
-    localStorage.setItem(key, JSON.stringify({ dia: new Date().toISOString().slice(0, 10), data }));
+    localStorage.setItem(key, JSON.stringify({ dia: hojeISO(), data }));
   } catch {}
 }
 
@@ -567,7 +568,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
 
         const limite24m = new Date();
         limite24m.setMonth(limite24m.getMonth() - 24);
-        const limiteStr = limite24m.toISOString().slice(0, 10);
+        const limiteStr = dataParaISO(limite24m);
 
         const cnpjMap = {}; // cnpj → { nomeCliente, dt, firstDt, pontuacao }
         snapPed.docs.forEach((d) => {
@@ -594,7 +595,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
         // Clientes cujo primeiro pedido foi nos últimos 30 dias
         const limite30d = new Date();
         limite30d.setDate(limite30d.getDate() - 30);
-        const limite30dStr = limite30d.toISOString().slice(0, 10);
+        const limite30dStr = dataParaISO(limite30d);
         const novos30d = Object.values(cnpjMap).filter((c) => c.firstDt >= limite30dStr).length;
         setNovosClientes30d(novos30d);
 
@@ -652,7 +653,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
     if (cached) { setMetricasNivel(cached); return; }
 
     const dataInicio = ultimos30dias();
-    const dataFim    = new Date().toISOString().slice(0, 10);
+    const dataFim    = hojeISO();
 
     async function buscarMetricasNivel() {
       try {
@@ -710,7 +711,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
         if (cachedPodium && cachedLideres) return;
 
         const dataInicio = ultimos30dias();
-        const dataFim    = new Date().toISOString().slice(0, 10);
+        const dataFim    = hojeISO();
 
         const snap = await getDocs(
           query(collection(db, 'pedidos'),
@@ -826,7 +827,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
       const dStr    = `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const d30Date = new Date(ano, mes - 1, d);
       d30Date.setDate(d30Date.getDate() - 30);
-      const d30Str  = d30Date.toISOString().slice(0, 10);
+      const d30Str  = dataParaISO(d30Date);
 
       // Pedidos do vendedor nos últimos 30 dias a partir de D
       const pedD = pedidosJanela.filter(p => {
@@ -913,7 +914,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
         // Janela para progressão de nível: [1º dia do mês − 30 dias, último dia do mês]
         const janelaStartDate = new Date(ano, mes - 1, 1);
         janelaStartDate.setDate(janelaStartDate.getDate() - 30);
-        const janelaStart = janelaStartDate.toISOString().slice(0, 10);
+        const janelaStart = dataParaISO(janelaStartDate);
         const janelaEnd   = `${ano}-${String(mes).padStart(2, '0')}-${String(new Date(ano, mes, 0).getDate()).padStart(2, '0')}`;
         const janela = todos.filter((p) => {
           const dv = p.dataVenda || '';

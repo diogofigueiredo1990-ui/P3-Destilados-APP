@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
+import { hojeISO } from '../utils/data';
 
 const MESES = [
   'Janeiro','Fevereiro','Março','Abril','Maio','Junho',
@@ -141,7 +142,7 @@ export default function FinanceiroDashboard() {
         estado:        modal.estado,
         mes:           prefixo,
         valor,
-        dataPagamento: new Date().toISOString().slice(0, 10),
+        dataPagamento: hojeISO(),
         tipo:          tipoPagto,
         observacao:    obs,
         registradoPor: perfil?.email || 'financeiro',

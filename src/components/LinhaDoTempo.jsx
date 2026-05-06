@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
+import { hojeISO, dataParaISO } from '../utils/data';
 import { db } from '../firebase/config';
 
 const FORM_VISITA_URL = 'https://docs.google.com/forms/d/e/1FAIpQLScV0qcBHN3VXHTyxSLWgV6yPGW-2o_ZY5cr_DkSVnXgjZxlwQ/viewform';
@@ -27,7 +28,7 @@ function maxDataAgend(lastDateStr, tipo, nivel) {
     d.setDate(d.getDate() + (nivel === 'amarelo' ? LIMITE.prospecto.vermelho - 1 : LIMITE.prospecto.expira - 1));
   else
     d.setDate(d.getDate() + (nivel === 'amarelo' ? LIMITE.cliente.vermelho - 1 : LIMITE.cliente.expira - 1));
-  return d.toISOString().slice(0, 10);
+  return dataParaISO(d);
 }
 
 function nivelAlerta(dias, tipo) {
@@ -183,7 +184,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
 
     getDocs(query(collection(db, 'pedidosDia'), where('vendedor', '==', vendedorNome)))
       .then(async (snap) => {
-        const hoje = new Date().toISOString().slice(0, 10);
+        const hoje = hojeISO();
         const lista = snap.docs
           .map((d) => ({ id: d.id, ...d.data() }))
           .filter((d) => d.dataSugestao === hoje);
@@ -211,7 +212,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
   // ── busca pedidos reais do dia (coleção "pedidos") ───────
   useEffect(() => {
     if (!vendedorNome) return;
-    const hoje = new Date().toISOString().slice(0, 10);
+    const hoje = hojeISO();
     const nomeNorm = normalizarNome(vendedorNome);
 
     getDocs(query(
@@ -257,7 +258,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
 
     async function carregarAlertas() {
       try {
-        const hoje = new Date().toISOString().slice(0, 10);
+        const hoje = hojeISO();
 
         // 1. Visitas — lê TUDO (alimenta mapa do vendedor + listas globais)
         const snapVis = await getDocs(collection(db, 'relatorioVisitas'));
@@ -422,7 +423,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
       await addDoc(collection(db, 'desistencias'), {
         vendedor: vendedorNome, empresa: modalDesistir.empresa,
         cnpj: modalDesistir.cnpj || '', tipo: modalDesistir.tipo,
-        dataDesistencia: new Date().toISOString().slice(0, 10),
+        dataDesistencia: hojeISO(),
         criadoEm: serverTimestamp(),
       });
       setDesistidas((p) => new Set([...p, modalDesistir.empresa]));
@@ -438,7 +439,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
   const morrendo        = pendentes.filter((g) => g.produtos.every((p) =>  parouDeUsar(p)));
   const primeiroNome    = vendedorNome ? vendedorNome.split(' ')[0] : '';
   const totalPendencias = todosAlertas.length + pendentesAtivos.length;
-  const hoje            = new Date().toISOString().slice(0, 10);
+  const hoje            = hojeISO();
   const agendFuturos    = agendamentosList.filter((a) => a.dataAgendada >= hoje).length;
 
   function toggleFeito(c)    { setFeitos((p)    => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n; }); }
@@ -708,7 +709,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
             <p style={sa.label}>Data da visita</p>
             <input type="date"
               value={dataAgend}
-              min={new Date().toISOString().slice(0, 10)}
+              min={hojeISO()}
               max={modalAgendar.tipo !== 'pedido' ? maxDataAgend(modalAgendar.lastDate, modalAgendar.tipo, modalAgendar.nivel) : undefined}
               onChange={(e) => setDataAgend(e.target.value)}
               style={{ ...sa.input, marginBottom: '6px' }}
@@ -763,8 +764,8 @@ export default function LinhaDoTempo({ vendedorNome }) {
 // ── aba agenda ───────────────────────────────────────────
 
 function AgendaView({ agendamentos, hoje, onInformar }) {
-  const amanha = (() => { const d = new Date(hoje + 'T00:00:00'); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
-  const semana = (() => { const d = new Date(hoje + 'T00:00:00'); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
+  const amanha = (() => { const d = new Date(hoje + 'T00:00:00'); d.setDate(d.getDate() + 1); return dataParaISO(d); })();
+  const semana = (() => { const d = new Date(hoje + 'T00:00:00'); d.setDate(d.getDate() + 7); return dataParaISO(d); })();
 
   const deHoje    = agendamentos.filter((a) => a.dataAgendada === hoje);
   const proximos  = agendamentos.filter((a) => a.dataAgendada > hoje && a.dataAgendada <= semana);
