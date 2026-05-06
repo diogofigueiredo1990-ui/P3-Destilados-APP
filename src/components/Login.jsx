@@ -28,8 +28,8 @@ export default function Login() {
     <div style={styles.container}>
       <div style={styles.card}>
         <div style={styles.logo}>
-          <span style={styles.logoIcon}>💰</span>
-          <h1 style={styles.logoText}>Comissões</h1>
+          <span style={styles.logoIcon}>🥃</span>
+          <h1 style={styles.logoText}>P3 Destilados</h1>
         </div>
         <p style={styles.subtitle}>Faça login para ver seu extrato</p>
 
