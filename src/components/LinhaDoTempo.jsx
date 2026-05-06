@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
 
@@ -147,6 +147,10 @@ function agruparPorCliente(itens) {
 
 // ── componente principal ──────────────────────────────────
 
+function normalizarNome(n) {
+  return String(n || '').replace(/\s+[A-Z]{2}$/, '').trim();
+}
+
 export default function LinhaDoTempo({ vendedorNome }) {
   const [itens, setItens]           = useState([]);
   const [contatos, setContatos]     = useState({});
@@ -154,6 +158,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
   const [expandidos, setExpandidos] = useState(new Set());
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro]             = useState(null);
+  const [pedidosHoje, setPedidosHoje] = useState([]);
 
   // alertas
   const [visitasMap, setVisitasMap]         = useState({});  // { empresa: { lastDate, cnpj } }
@@ -201,6 +206,49 @@ export default function LinhaDoTempo({ vendedorNome }) {
       })
       .catch((e) => { console.error(e); setErro('Erro ao carregar atividades.'); })
       .finally(() => setCarregando(false));
+  }, [vendedorNome]);
+
+  // ── busca pedidos reais do dia (coleção "pedidos") ───────
+  useEffect(() => {
+    if (!vendedorNome) return;
+    const hoje = new Date().toISOString().slice(0, 10);
+    const nomeNorm = normalizarNome(vendedorNome);
+
+    getDocs(query(
+      collection(db, 'pedidos'),
+      where('dataVenda', '>=', hoje),
+      where('dataVenda', '<=', hoje),
+    )).then((snap) => {
+      const lista = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((p) => {
+          const v = String(p.vendedor || '');
+          return v === vendedorNome || normalizarNome(v) === nomeNorm;
+        });
+
+      // Agrupa por venda (chave = contaAzul_numeroVenda)
+      const mapaVendas = {};
+      for (const p of lista) {
+        const partes = (p.chave || '').split('_');
+        const vidKey = partes.length >= 2 ? `${p.contaAzul || ''}_${partes[1]}` : (p.chave || p.id);
+        if (!mapaVendas[vidKey]) {
+          mapaVendas[vidKey] = {
+            key: vidKey,
+            cliente: p.cliente || '—',
+            numeroVenda: partes[1] || p.chave || '',
+            situacao: p.situacao || '',
+            estado: p.estado || '',
+            produtos: [],
+            totalFat: 0,
+            totalCom: 0,
+          };
+        }
+        mapaVendas[vidKey].produtos.push(p);
+        mapaVendas[vidKey].totalFat += Number(p.faturamento || 0);
+        mapaVendas[vidKey].totalCom += Number(p.comissao || 0);
+      }
+      setPedidosHoje(Object.values(mapaVendas).sort((a, b) => b.totalFat - a.totalFat));
+    }).catch((e) => console.error('pedidosHoje:', e));
   }, [vendedorNome]);
 
   // ── busca dados para alertas de visita ───────────────────
@@ -465,6 +513,52 @@ export default function LinhaDoTempo({ vendedorNome }) {
       {/* ═══════════════════════════════════════════════════ */}
       {aba === 'hoje' && <>
 
+      {/* ── Pedidos realizados hoje ──────────────────────── */}
+      {pedidosHoje.length > 0 && (
+        <div style={{ ...s.grupo, marginTop: '12px' }}>
+          <p style={s.grupoLabel}>
+            📦 Pedidos de hoje
+            <span style={{ marginLeft: '8px', fontWeight: '600', color: '#16a34a', background: '#dcfce7', padding: '1px 8px', borderRadius: '20px', fontSize: '11px', textTransform: 'none', letterSpacing: 0 }}>
+              {pedidosHoje.length} {pedidosHoje.length === 1 ? 'venda' : 'vendas'} · {pedidosHoje.reduce((s, v) => s + v.totalFat, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            </span>
+          </p>
+          {pedidosHoje.map((v) => (
+            <div key={v.key} style={{
+              background: '#fff',
+              borderRadius: '12px',
+              padding: '13px 14px',
+              marginBottom: '8px',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+              borderLeft: '4px solid #16a34a',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: '700', color: '#111827' }}>{v.cliente}</p>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={{ fontSize: '12px', color: '#6b7280' }}>#{v.numeroVenda}</span>
+                    <span style={{ fontSize: '12px', color: '#6b7280' }}>{v.produtos.length} {v.produtos.length === 1 ? 'produto' : 'produtos'}</span>
+                    {v.estado && <span style={{ fontSize: '11px', color: '#9ca3af' }}>{v.estado}</span>}
+                    {v.situacao && (
+                      <span style={{ fontSize: '11px', fontWeight: '600', padding: '1px 7px', borderRadius: '20px', background: '#f3f4f6', color: '#6b7280' }}>
+                        {v.situacao}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <p style={{ margin: '0 0 2px', fontSize: '15px', fontWeight: '700', color: '#111827' }}>
+                    {v.totalFat.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </p>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#16a34a', fontWeight: '600' }}>
+                    Com. {v.totalCom.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ── Sugestão de pedidos do dia ───────────────────── */}
       {pendentesAtivos.length > 0 && (
         <div style={{ ...s.grupo, marginTop: '12px' }}>
@@ -576,7 +670,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
         </div>
       )}
 
-      {grupos.length === 0 && todosAlertas.length === 0 && (
+      {grupos.length === 0 && todosAlertas.length === 0 && pedidosHoje.length === 0 && (
         <div style={{ textAlign: 'center', padding: '60px 16px' }}>
           <p style={{ fontSize: '32px', margin: 0 }}>✅</p>
           <p style={{ color: '#6b7280', marginTop: '8px' }}>Nenhuma atividade para hoje.</p>
