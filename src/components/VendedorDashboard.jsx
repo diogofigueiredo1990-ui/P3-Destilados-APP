@@ -123,20 +123,20 @@ function normalizarCnpj(cnpj) {
 async function buscarClientes(cnpjs) {
   if (!cnpjs.length) return {};
   const mapa = {};
-  for (let i = 0; i < cnpjs.length; i += 30) {
-    const lote = cnpjs.slice(i, i + 30);
-    const q = query(collection(db, 'clientes'), where('cnpj', 'in', lote));
-    const snap = await getDocs(q);
-    snap.docs.forEach((d) => {
-      const data = d.data();
-      mapa[data.cnpj] = {
-        status:          data.status          || '',
-        statusBloqueio:  data.statusBloqueio  || '',
-        orientacaoVenda: data.orientacaoVenda || '',
-        score:           data.score           || '',
-      };
-    });
-  }
+  const lotes = [];
+  for (let i = 0; i < cnpjs.length; i += 30) lotes.push(cnpjs.slice(i, i + 30));
+  const snaps = await Promise.all(
+    lotes.map((lote) => getDocs(query(collection(db, 'clientes'), where('cnpj', 'in', lote))))
+  );
+  snaps.forEach((snap) => snap.docs.forEach((d) => {
+    const data = d.data();
+    mapa[data.cnpj] = {
+      status:          data.status          || '',
+      statusBloqueio:  data.statusBloqueio  || '',
+      orientacaoVenda: data.orientacaoVenda || '',
+      score:           data.score           || '',
+    };
+  }));
   return mapa;
 }
 
@@ -157,17 +157,17 @@ async function buscarFinanceiro(pedidos) {
   const mapa = {};
   const ids = [...new Set(pedidos.map(finId).filter(Boolean))];
   if (!ids.length) return {};
-  for (let i = 0; i < ids.length; i += 30) {
-    const lote = ids.slice(i, i + 30);
-    const q = query(collection(db, 'financeiro'), where('docId', 'in', lote));
-    const snap = await getDocs(q);
-    snap.docs.forEach((d) => {
-      const data = d.data();
-      const boletos = Array.isArray(data.boletos) ? data.boletos : [];
-      const maxDias = boletos.reduce((mx, b) => Math.max(mx, Number(b.diasAtraso || 0)), 0);
-      mapa[data.docId] = { statusGeral: data.statusGeral || 'EM_ABERTO', diasAtraso: maxDias };
-    });
-  }
+  const lotes = [];
+  for (let i = 0; i < ids.length; i += 30) lotes.push(ids.slice(i, i + 30));
+  const snaps = await Promise.all(
+    lotes.map((lote) => getDocs(query(collection(db, 'financeiro'), where('docId', 'in', lote))))
+  );
+  snaps.forEach((snap) => snap.docs.forEach((d) => {
+    const data = d.data();
+    const boletos = Array.isArray(data.boletos) ? data.boletos : [];
+    const maxDias = boletos.reduce((mx, b) => Math.max(mx, Number(b.diasAtraso || 0)), 0);
+    mapa[data.docId] = { statusGeral: data.statusGeral || 'EM_ABERTO', diasAtraso: maxDias };
+  }));
   return mapa;
 }
 

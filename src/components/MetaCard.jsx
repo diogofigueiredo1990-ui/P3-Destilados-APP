@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { hojeISO } from '../utils/data';
 
 function moeda(v) {
   return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -40,6 +41,17 @@ function prefixo(ano, mes) {
 }
 
 async function buscarHistorico(ano, mes, vendedor) {
+  // ── Cache diário: evita re-fetch para o mesmo mês/vendedor no mesmo dia ──
+  const slug     = (vendedor || 'geral').toLowerCase().replace(/\s+/g, '_');
+  const cacheKey = `p3_meta_${slug}_${ano}_${mes}`;
+  try {
+    const raw = localStorage.getItem(cacheKey);
+    if (raw) {
+      const obj = JSON.parse(raw);
+      if (obj.dia === hojeISO()) return obj.data;
+    }
+  } catch {}
+
   const meses = [1, 2, 3].map((n) => mesAnterior(ano, mes, n));
   const byMonth = {};
 
@@ -65,10 +77,14 @@ async function buscarHistorico(ano, mes, vendedor) {
     });
   }
 
-  return meses.map((m) => ({
+  const resultado = meses.map((m) => ({
     mes: m,
     fat: byMonth[prefixo(m.ano, m.mes)] || 0,
   }));
+
+  try { localStorage.setItem(cacheKey, JSON.stringify({ dia: hojeISO(), data: resultado })); } catch {}
+
+  return resultado;
 }
 
 const NOMES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];

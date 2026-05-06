@@ -177,6 +177,10 @@ export default function LinhaDoTempo({ vendedorNome }) {
   const [aba, setAba]                       = useState('hoje'); // 'hoje' | 'agenda'
   const [agendamentosList, setAgendamentosList] = useState([]); // lista completa p/ Agenda
 
+  // cache key compartilhado entre o useEffect e as funções de ação
+  const slug     = vendedorNome ? vendedorNome.toLowerCase().replace(/\s+/g, '_') : '';
+  const cacheKey = `p3_alertas_${slug}`;
+
   useEffect(() => {
     if (!vendedorNome) { setCarregando(false); return; }
     setCarregando(true);
@@ -256,12 +260,40 @@ export default function LinhaDoTempo({ vendedorNome }) {
   useEffect(() => {
     if (!vendedorNome) return;
 
+    const TTL_MS = 4 * 60 * 60 * 1000; // 4 horas
+
+    function restaurarCache() {
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        if (!raw) return false;
+        const obj = JSON.parse(raw);
+        if (Date.now() - obj.ts > TTL_MS) return false;
+        const hoje = hojeISO();
+        setVisitasMap(obj.visitasMap || {});
+        setDesistidas(new Set(obj.desistidas || []));
+        setAgendamentosMap(obj.agendamentosMap || {});
+        setAgendamentosList(obj.agendamentosList || []);
+        setProspectosLivres(obj.prospectosLivres || []);
+        setClientesInativos(obj.clientesInativos || []);
+        return true;
+      } catch { return false; }
+    }
+
+    if (restaurarCache()) return; // cache válido → não faz nenhuma query
+
     async function carregarAlertas() {
       try {
         const hoje = hojeISO();
 
-        // 1. Visitas — lê TUDO (alimenta mapa do vendedor + listas globais)
-        const snapVis = await getDocs(collection(db, 'relatorioVisitas'));
+        // Todas as 4 coleções em PARALELO (antes eram sequenciais)
+        const [snapVis, snapDes, snapAg, snapTodosPed] = await Promise.all([
+          getDocs(collection(db, 'relatorioVisitas')),
+          getDocs(collection(db, 'desistencias')),
+          getDocs(query(collection(db, 'agendamentosVisita'), where('vendedor', '==', vendedorNome))),
+          getDocs(collection(db, 'pedidosDia')),
+        ]);
+
+        // 1. Visitas
         const mapaVendedor = {};
         const mapaGlobal   = {};
         snapVis.docs.forEach((d) => {
@@ -269,29 +301,23 @@ export default function LinhaDoTempo({ vendedorNome }) {
           if (!r.empresa) return;
           const dt   = (r.dataHoraVisita || r.carimbo || '').slice(0, 10);
           const est  = r.estado || extrairEstado(r.vendedor);
-          const resp = r.vendedorResponsavel || r.vendedor || ''; // responsável atual, fallback para quem visitou
-
+          const resp = r.vendedorResponsavel || r.vendedor || '';
           if (!mapaGlobal[r.empresa] || dt > mapaGlobal[r.empresa].lastDate)
             mapaGlobal[r.empresa] = { lastDate: dt, cnpj: r.cnpj || '', vendedor: resp, estado: est };
-
-          // Alimenta mapaVendedor pelo responsável atual (não por quem visitou)
           if (resp === vendedorNome) {
             if (!mapaVendedor[r.empresa] || dt > mapaVendedor[r.empresa].lastDate)
               mapaVendedor[r.empresa] = { lastDate: dt, cnpj: r.cnpj || '' };
           }
         });
-        setVisitasMap(mapaVendedor);
 
-        // 2. Desistências — lê TUDO (filtra vendedor p/ estado local + global p/ listas)
-        const snapDes = await getDocs(collection(db, 'desistencias'));
+        // 2. Desistências
         const todasDesistencias = new Set(snapDes.docs.map((d) => d.data().empresa));
-        setDesistidas(new Set(
-          snapDes.docs.filter((d) => d.data().vendedor === vendedorNome).map((d) => d.data().empresa)
-        ));
+        const minhasDesistidas  = snapDes.docs
+          .filter((d) => d.data().vendedor === vendedorNome)
+          .map((d) => d.data().empresa);
 
-        // 3. Todos os agendamentos do vendedor (futuros + passados recentes para a Agenda)
-        const snapAg = await getDocs(query(collection(db, 'agendamentosVisita'), where('vendedor', '==', vendedorNome)));
-        const agMap = {};
+        // 3. Agendamentos
+        const agMap  = {};
         const agList = [];
         snapAg.docs.forEach((d) => {
           const a = d.data();
@@ -299,12 +325,10 @@ export default function LinhaDoTempo({ vendedorNome }) {
           agList.push({ id: d.id, ...a });
           if (a.dataAgendada >= hoje) agMap[a.empresa] = a.dataAgendada;
         });
-        setAgendamentosMap(agMap);
-        setAgendamentosList(agList.sort((a, b) => a.dataAgendada.localeCompare(b.dataAgendada)));
+        agList.sort((a, b) => a.dataAgendada.localeCompare(b.dataAgendada));
 
-        // 4. Prospectos Livres (global: prospectos > 30d sem visita)
-        //    Clientes Inativos por visita (global: clientes > 90d sem visita)
-        const livres = [];
+        // 4. Prospectos Livres + Clientes Inativos (visita)
+        const livres     = [];
         const inativosMap = {};
         Object.entries(mapaGlobal).forEach(([empresa, info]) => {
           if (todasDesistencias.has(empresa)) return;
@@ -317,8 +341,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
             inativosMap[empresa] = { empresa, cnpj: info.cnpj, dias, lastDate: info.lastDate, vendedor: info.vendedor, estado: info.estado, motivo: 'visita' };
         });
 
-        // 5. Clientes Inativos por pedido (global: clientes > 90d sem pedido)
-        const snapTodosPed = await getDocs(collection(db, 'pedidosDia'));
+        // 5. Clientes Inativos por pedido (pedidosDia)
         const porClientePed = {};
         snapTodosPed.docs.forEach((d) => {
           const p = d.data();
@@ -327,10 +350,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
           if (dias === null) return;
           const resp = p.vendedorResponsavel || p.vendedor || '';
           if (!porClientePed[p.cliente] || dias < porClientePed[p.cliente].dias)
-            porClientePed[p.cliente] = {
-              dias, lastDate: p.ultimaCompra, vendedor: resp,
-              estado: p.estado || extrairEstado(resp),
-            };
+            porClientePed[p.cliente] = { dias, lastDate: p.ultimaCompra, vendedor: resp, estado: p.estado || extrairEstado(resp) };
         });
         Object.entries(porClientePed).forEach(([empresa, info]) => {
           if (todasDesistencias.has(empresa)) return;
@@ -338,8 +358,28 @@ export default function LinhaDoTempo({ vendedorNome }) {
             inativosMap[empresa] = { empresa, cnpj: '', dias: info.dias, lastDate: info.lastDate, vendedor: info.vendedor, estado: info.estado, motivo: 'pedido' };
         });
 
-        setProspectosLivres(livres.sort((a, b) => b.dias - a.dias));
-        setClientesInativos(Object.values(inativosMap).sort((a, b) => b.dias - a.dias));
+        const livresOrdenados   = livres.sort((a, b) => b.dias - a.dias);
+        const inativosOrdenados = Object.values(inativosMap).sort((a, b) => b.dias - a.dias);
+
+        // Salva no cache (4h)
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({
+            ts: Date.now(),
+            visitasMap:       mapaVendedor,
+            desistidas:       minhasDesistidas,
+            agendamentosMap:  agMap,
+            agendamentosList: agList,
+            prospectosLivres: livresOrdenados,
+            clientesInativos: inativosOrdenados,
+          }));
+        } catch {}
+
+        setVisitasMap(mapaVendedor);
+        setDesistidas(new Set(minhasDesistidas));
+        setAgendamentosMap(agMap);
+        setAgendamentosList(agList);
+        setProspectosLivres(livresOrdenados);
+        setClientesInativos(inativosOrdenados);
       } catch (e) { console.error(e); }
     }
     carregarAlertas();
@@ -411,6 +451,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
           dataAgendada: dataAgend, vendedor: vendedorNome,
         }].sort((a, b) => a.dataAgendada.localeCompare(b.dataAgendada))
       );
+      localStorage.removeItem(cacheKey); // invalida cache para refletir o novo agendamento
       setModalAgendar(null);
     } catch (e) { console.error(e); }
     finally { setSalvandoAcao(false); }
@@ -427,6 +468,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
         criadoEm: serverTimestamp(),
       });
       setDesistidas((p) => new Set([...p, modalDesistir.empresa]));
+      localStorage.removeItem(cacheKey); // invalida cache para refletir a desistência
       setModalDesistir(null);
     } catch (e) { console.error(e); }
     finally { setSalvandoAcao(false); }
