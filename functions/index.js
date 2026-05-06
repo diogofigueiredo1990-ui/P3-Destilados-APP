@@ -219,3 +219,295 @@ exports.calcularNiveisDiarios = onSchedule(
     logger.info(`✅ Concluído — ${countTotal} documentos gravados em niveis_diarios`);
   }
 );
+
+// ════════════════════════════════════════════════════════════════════════════
+//  calcularAlertasDiarios
+//  Roda às 02:30 BRT e grava alertas_diarios/{vendedor}_{data} com:
+//    · alertas[]       — cards de alerta (amarelo/vermelho) por empresa
+//    · prospectosLivres[] — prospectos expirados (≥30d sem visita)
+//    · clientesInativos[] — clientes inativos (≥90d sem visita ou pedido)
+//
+//  Cada alerta:
+//    empresa, cnpj, tipo (cliente|prospecto), estado
+//    nivel (vermelho|amarelo)   — o mais grave entre visita e pedido
+//    escuro (bool)              — true quando TEM AMBOS visita + pedido
+//    nivelVisita, nivelPedido   — nível individual de cada tipo
+//    diasVisita, diasPedido     — dias sem cada atividade (null se n/a)
+//    dias                       — max(diasVisita, diasPedido) — para exibição
+//    diasParaExpirar            — dias até sair do radar
+//    lastDateVisita, lastDatePedido
+// ════════════════════════════════════════════════════════════════════════════
+
+const LIM = {
+  prospecto: { amarelo: 15, vermelho: 23, expira: 30 },
+  cliente:   { amarelo: 30, vermelho: 60, expira: 90 },
+  pedido:    { amarelo: 30, vermelho: 60, expira: 90 },
+};
+
+function diasDesdeStr(str) {
+  if (!str) return null;
+  const d = new Date(String(str).slice(0, 10) + 'T00:00:00');
+  if (isNaN(d)) return null;
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  return Math.floor((hoje - d) / 86400000);
+}
+
+function nivelAlertaFn(dias, tipo) {
+  const L = tipo === 'prospecto' ? LIM.prospecto : tipo === 'pedido' ? LIM.pedido : LIM.cliente;
+  if (dias >= L.vermelho) return 'vermelho';
+  if (dias >= L.amarelo)  return 'amarelo';
+  return null;
+}
+
+function extrairEstadoNome(nome) {
+  const m = String(nome || '').match(/\s+([A-Z]{2})$/);
+  return m ? m[1] : '';
+}
+
+exports.calcularAlertasDiarios = onSchedule(
+  {
+    schedule:      '30 2 * * *',
+    timeZone:      'America/Sao_Paulo',
+    region:        'southamerica-east1',
+    memory:        '512MiB',
+    timeoutSeconds: 540,
+  },
+  async (_event) => {
+    const hoje = dataISO(new Date());
+    logger.info(`▶ calcularAlertasDiarios — ${hoje}`);
+
+    // 1. Carrega as 4 coleções em paralelo
+    const [snapVis, snapDes, snapPed, snapAg] = await Promise.all([
+      db.collection('relatorioVisitas').get(),
+      db.collection('desistencias').get(),
+      db.collection('pedidosDia').get(),
+      db.collection('agendamentosVisita').where('dataAgendada', '>=', hoje).get(),
+    ]);
+
+    // 2. Desistências (global — qualquer vendedor)
+    const todasDesistencias = new Set(
+      snapDes.docs.map(d => d.data().empresa).filter(Boolean)
+    );
+
+    // 3. Última visita por empresa (responsável → {lastDate, cnpj, estado})
+    const ultimaVisitaPorEmpVend = {}; // `${vendedor}__${empresa}` → {lastDate, cnpj, estado}
+    const ultimaVisitaGlobal     = {}; // empresa → {lastDate, cnpj, vendedor, estado}
+
+    snapVis.docs.forEach(d => {
+      const r   = d.data();
+      if (!r.empresa) return;
+      const dt   = (r.dataHoraVisita || r.carimbo || '').slice(0, 10);
+      if (!dt) return;
+      const resp = r.vendedorResponsavel || r.vendedor || '';
+      const est  = r.estado || extrairEstadoNome(resp);
+      const cnpj = r.cnpj || '';
+
+      // global (para prospectos livres / inativos globais)
+      if (!ultimaVisitaGlobal[r.empresa] || dt > ultimaVisitaGlobal[r.empresa].lastDate)
+        ultimaVisitaGlobal[r.empresa] = { lastDate: dt, cnpj, vendedor: resp, estado: est };
+
+      // por vendedor responsável
+      if (!resp) return;
+      const key = `${resp}__${r.empresa}`;
+      if (!ultimaVisitaPorEmpVend[key] || dt > ultimaVisitaPorEmpVend[key].lastDate)
+        ultimaVisitaPorEmpVend[key] = { lastDate: dt, cnpj, estado: est };
+    });
+
+    // 4. Última compra por cliente × vendedor responsável (via pedidosDia)
+    const ultimaCompraPorCliVend = {}; // `${vendedor}__${cliente}` → {lastDate, estado, cnpj}
+    const ultimaCompraGlobal     = {}; // cliente → {lastDate, vendedor, estado}
+
+    snapPed.docs.forEach(d => {
+      const p = d.data();
+      if (!p.cliente || !p.ultimaCompra) return;
+      const resp = p.vendedorResponsavel || p.vendedor || '';
+      const est  = p.estado || extrairEstadoNome(resp);
+      const dt   = p.ultimaCompra;
+
+      // global
+      if (!ultimaCompraGlobal[p.cliente] ||
+          diasDesdeStr(dt) < diasDesdeStr(ultimaCompraGlobal[p.cliente].lastDate))
+        ultimaCompraGlobal[p.cliente] = { lastDate: dt, vendedor: resp, estado: est };
+
+      if (!resp) return;
+      const key = `${resp}__${p.cliente}`;
+      if (!ultimaCompraPorCliVend[key] ||
+          diasDesdeStr(dt) < diasDesdeStr(ultimaCompraPorCliVend[key].lastDate))
+        ultimaCompraPorCliVend[key] = { lastDate: dt, estado: est, cnpj: p.cnpj || '' };
+    });
+
+    // 5. Agendamentos futuros (para excluir das listas, igual ao front-end)
+    const agendMap = {}; // `${vendedor}__${empresa}` → dataAgendada
+    snapAg.docs.forEach(d => {
+      const a = d.data();
+      if (!a.empresa || !a.vendedor || !a.dataAgendada) return;
+      const key = `${a.vendedor}__${a.empresa}`;
+      if (!agendMap[key] || a.dataAgendada > agendMap[key]) agendMap[key] = a.dataAgendada;
+    });
+
+    // 6. Descobre todos os vendedores que aparecem
+    const todosVendedores = new Set();
+    Object.keys(ultimaVisitaPorEmpVend).forEach(k => todosVendedores.add(k.split('__')[0]));
+    Object.keys(ultimaCompraPorCliVend).forEach(k => todosVendedores.add(k.split('__')[0]));
+
+    // 7. Calcula alertas por vendedor e salva
+    let batch = db.batch();
+    let countBatch = 0, countTotal = 0;
+
+    for (const vendedor of todosVendedores) {
+      if (!vendedor.trim()) continue;
+
+      const mapaAlertas = {}; // empresa → alerta parcial
+
+      // ── Alertas de VISITA ─────────────────────────────────────────────
+      for (const [key, info] of Object.entries(ultimaVisitaPorEmpVend)) {
+        const [vend, empresa] = key.split('__');
+        if (vend !== vendedor) continue;
+        if (todasDesistencias.has(empresa)) continue;
+
+        const dias = diasDesdeStr(info.lastDate);
+        if (dias === null) continue;
+
+        const isCliente = !!info.cnpj;
+        const tipoVisita = isCliente ? 'cliente' : 'prospecto';
+        const L = isCliente ? LIM.cliente : LIM.prospecto;
+
+        if (dias < L.amarelo || dias >= L.expira) continue; // fora do range de alerta
+
+        const nivelV = nivelAlertaFn(dias, tipoVisita);
+        if (!nivelV) continue;
+
+        if (!mapaAlertas[empresa]) {
+          mapaAlertas[empresa] = {
+            empresa, cnpj: info.cnpj, tipo: tipoVisita, estado: info.estado,
+            nivelVisita: nivelV, nivelPedido: null,
+            diasVisita: dias, diasPedido: null,
+            lastDateVisita: info.lastDate, lastDatePedido: null,
+          };
+        } else {
+          mapaAlertas[empresa].nivelVisita  = nivelV;
+          mapaAlertas[empresa].diasVisita   = dias;
+          mapaAlertas[empresa].lastDateVisita = info.lastDate;
+        }
+      }
+
+      // ── Alertas de PEDIDO ─────────────────────────────────────────────
+      for (const [key, info] of Object.entries(ultimaCompraPorCliVend)) {
+        const [vend, empresa] = key.split('__');
+        if (vend !== vendedor) continue;
+        if (todasDesistencias.has(empresa)) continue;
+
+        const dias = diasDesdeStr(info.lastDate);
+        if (dias === null) continue;
+        if (dias < LIM.pedido.amarelo || dias >= LIM.pedido.expira) continue;
+
+        const nivelP = nivelAlertaFn(dias, 'pedido');
+        if (!nivelP) continue;
+
+        if (!mapaAlertas[empresa]) {
+          mapaAlertas[empresa] = {
+            empresa, cnpj: info.cnpj || '', tipo: 'cliente', estado: info.estado,
+            nivelVisita: null, nivelPedido: nivelP,
+            diasVisita: null, diasPedido: dias,
+            lastDateVisita: null, lastDatePedido: info.lastDate,
+          };
+        } else {
+          mapaAlertas[empresa].nivelPedido   = nivelP;
+          mapaAlertas[empresa].diasPedido    = dias;
+          mapaAlertas[empresa].lastDatePedido = info.lastDate;
+          if (info.cnpj && !mapaAlertas[empresa].cnpj) mapaAlertas[empresa].cnpj = info.cnpj;
+        }
+      }
+
+      // ── Consolida: nivel final, escuro, dias, diasParaExpirar ──────────
+      const alertas = Object.values(mapaAlertas).map(a => {
+        const nivelFinal = (a.nivelVisita === 'vermelho' || a.nivelPedido === 'vermelho')
+          ? 'vermelho' : 'amarelo';
+        const escuro = !!(a.nivelVisita && a.nivelPedido);
+        const dias   = Math.max(a.diasVisita ?? 0, a.diasPedido ?? 0);
+
+        // diasParaExpirar: dias até sair do radar (usa o MENOR limite dos tipos presentes)
+        let diasParaExpirar = null;
+        if (a.diasVisita !== null) {
+          const L = a.tipo === 'prospecto' ? LIM.prospecto : LIM.cliente;
+          diasParaExpirar = L.expira - a.diasVisita;
+        }
+        if (a.diasPedido !== null) {
+          const restP = LIM.pedido.expira - a.diasPedido;
+          if (diasParaExpirar === null || restP < diasParaExpirar) diasParaExpirar = restP;
+        }
+
+        // subTipo para compatibilidade com o front-end
+        const subTipo = a.nivelVisita && a.nivelPedido ? 'ambos'
+          : a.nivelPedido ? 'pedido' : 'visita';
+
+        return {
+          empresa: a.empresa, cnpj: a.cnpj, tipo: a.tipo, estado: a.estado,
+          nivel: nivelFinal, escuro, subTipo,
+          nivelVisita: a.nivelVisita, nivelPedido: a.nivelPedido,
+          diasVisita: a.diasVisita, diasPedido: a.diasPedido,
+          dias, diasParaExpirar,
+          lastDateVisita: a.lastDateVisita, lastDatePedido: a.lastDatePedido,
+        };
+      }).sort((a, b) => {
+        if (a.nivel !== b.nivel) return a.nivel === 'vermelho' ? -1 : 1;
+        return b.dias - a.dias;
+      });
+
+      // ── Prospectos Livres (≥ expira de visita) ─────────────────────────
+      const prospectosLivres = [];
+      for (const [key, info] of Object.entries(ultimaVisitaPorEmpVend)) {
+        const [vend, empresa] = key.split('__');
+        if (vend !== vendedor || info.cnpj) continue;   // só prospectos
+        if (todasDesistencias.has(empresa)) continue;
+        const dias = diasDesdeStr(info.lastDate);
+        if (dias !== null && dias >= LIM.prospecto.expira)
+          prospectosLivres.push({ empresa, dias, lastDate: info.lastDate, estado: info.estado });
+      }
+      prospectosLivres.sort((a, b) => b.dias - a.dias);
+
+      // ── Clientes Inativos (visita ≥90d ou pedido ≥90d) ────────────────
+      const inativosMap = {};
+
+      for (const [key, info] of Object.entries(ultimaVisitaPorEmpVend)) {
+        const [vend, empresa] = key.split('__');
+        if (vend !== vendedor || !info.cnpj) continue;
+        if (todasDesistencias.has(empresa)) continue;
+        const dias = diasDesdeStr(info.lastDate);
+        if (dias !== null && dias >= LIM.cliente.expira)
+          inativosMap[empresa] = { empresa, cnpj: info.cnpj, dias, lastDate: info.lastDate, estado: info.estado, motivo: 'visita' };
+      }
+
+      for (const [key, info] of Object.entries(ultimaCompraPorCliVend)) {
+        const [vend, empresa] = key.split('__');
+        if (vend !== vendedor) continue;
+        if (todasDesistencias.has(empresa)) continue;
+        const dias = diasDesdeStr(info.lastDate);
+        if (dias !== null && dias >= LIM.pedido.expira && !inativosMap[empresa])
+          inativosMap[empresa] = { empresa, cnpj: info.cnpj || '', dias, lastDate: info.lastDate, estado: info.estado, motivo: 'pedido' };
+      }
+
+      const clientesInativos = Object.values(inativosMap).sort((a, b) => b.dias - a.dias);
+
+      // ── Grava no Firestore ─────────────────────────────────────────────
+      const slug  = vendedor.toLowerCase().replace(/\s+/g, '_');
+      const docId = `${slug}_${hoje}`;
+      batch.set(db.collection('alertas_diarios').doc(docId), {
+        vendedor, data: hoje, calculadoEm: Timestamp.now(),
+        alertas, prospectosLivres, clientesInativos,
+      });
+
+      countBatch++;
+      countTotal++;
+
+      if (countBatch >= 490) {
+        await batch.commit();
+        batch = db.batch();
+        countBatch = 0;
+      }
+    }
+
+    if (countBatch > 0) await batch.commit();
+    logger.info(`✅ calcularAlertasDiarios — ${countTotal} vendedores em alertas_diarios`);
+  }
+);

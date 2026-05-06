@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
+import { useState, useEffect } from 'react';
+import { collection, query, where, getDocs, getDoc, doc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { hojeISO, dataParaISO } from '../utils/data';
 import { db } from '../firebase/config';
 
@@ -7,7 +7,7 @@ const FORM_VISITA_URL = 'https://docs.google.com/forms/d/e/1FAIpQLScV0qcBHN3VXHT
 
 // Limiares de alerta (dias)
 const LIMITE = {
-  prospecto: { amarelo: 14, vermelho: 23, expira: 30 },
+  prospecto: { amarelo: 15, vermelho: 23, expira: 30 },
   cliente:   { amarelo: 30, vermelho: 60, expira: 90 },
   pedido:    { amarelo: 30, vermelho: 60, expira: 90 },
 };
@@ -162,15 +162,13 @@ export default function LinhaDoTempo({ vendedorNome }) {
   const [pedidosHoje, setPedidosHoje] = useState([]);
 
   // alertas
-  const [visitasMap, setVisitasMap]         = useState({});  // { empresa: { lastDate, cnpj } }
+  const [alertasDiarios, setAlertasDiarios] = useState(null); // { alertas, prospectosLivres, clientesInativos }
   const [desistidas, setDesistidas]         = useState(new Set());
   const [agendamentosMap, setAgendamentosMap] = useState({}); // { empresa: 'YYYY-MM-DD' }
   const [modalAgendar, setModalAgendar]     = useState(null);
   const [modalDesistir, setModalDesistir]   = useState(null);
   const [dataAgend, setDataAgend]           = useState('');
   const [salvandoAcao, setSalvandoAcao]     = useState(false);
-  const [prospectosLivres, setProspectosLivres] = useState([]);
-  const [clientesInativos, setClientesInativos] = useState([]);
   const [mostrarPL, setMostrarPL]           = useState(false);
   const [mostrarCI, setMostrarCI]           = useState(false);
   const [alertasFeitos, setAlertasFeitos]   = useState(new Set());
@@ -256,7 +254,7 @@ export default function LinhaDoTempo({ vendedorNome }) {
     }).catch((e) => console.error('pedidosHoje:', e));
   }, [vendedorNome]);
 
-  // ── busca dados para alertas de visita ───────────────────
+  // ── busca alertas pré-calculados de alertas_diarios ─────
   useEffect(() => {
     if (!vendedorNome) return;
 
@@ -268,55 +266,41 @@ export default function LinhaDoTempo({ vendedorNome }) {
         if (!raw) return false;
         const obj = JSON.parse(raw);
         if (Date.now() - obj.ts > TTL_MS) return false;
-        const hoje = hojeISO();
-        setVisitasMap(obj.visitasMap || {});
+        setAlertasDiarios(obj.alertasDiarios || null);
         setDesistidas(new Set(obj.desistidas || []));
         setAgendamentosMap(obj.agendamentosMap || {});
         setAgendamentosList(obj.agendamentosList || []);
-        setProspectosLivres(obj.prospectosLivres || []);
-        setClientesInativos(obj.clientesInativos || []);
         return true;
       } catch { return false; }
     }
 
-    if (restaurarCache()) return; // cache válido → não faz nenhuma query
+    if (restaurarCache()) return;
 
     async function carregarAlertas() {
       try {
         const hoje = hojeISO();
+        const docId = `${slug}_${hoje}`;
 
-        // Todas as 4 coleções em PARALELO (antes eram sequenciais)
-        const [snapVis, snapDes, snapAg, snapTodosPed] = await Promise.all([
-          getDocs(collection(db, 'relatorioVisitas')),
-          getDocs(collection(db, 'desistencias')),
+        // 3 queries em paralelo: 1 doc pré-calculado + 2 queries filtradas por vendedor
+        const [snapAlerta, snapDes, snapAg] = await Promise.all([
+          getDoc(doc(db, 'alertas_diarios', docId)),
+          getDocs(query(collection(db, 'desistencias'), where('vendedor', '==', vendedorNome))),
           getDocs(query(collection(db, 'agendamentosVisita'), where('vendedor', '==', vendedorNome))),
-          getDocs(collection(db, 'pedidosDia')),
         ]);
 
-        // 1. Visitas
-        const mapaVendedor = {};
-        const mapaGlobal   = {};
-        snapVis.docs.forEach((d) => {
-          const r = d.data();
-          if (!r.empresa) return;
-          const dt   = (r.dataHoraVisita || r.carimbo || '').slice(0, 10);
-          const est  = r.estado || extrairEstado(r.vendedor);
-          const resp = r.vendedorResponsavel || r.vendedor || '';
-          if (!mapaGlobal[r.empresa] || dt > mapaGlobal[r.empresa].lastDate)
-            mapaGlobal[r.empresa] = { lastDate: dt, cnpj: r.cnpj || '', vendedor: resp, estado: est };
-          if (resp === vendedorNome) {
-            if (!mapaVendedor[r.empresa] || dt > mapaVendedor[r.empresa].lastDate)
-              mapaVendedor[r.empresa] = { lastDate: dt, cnpj: r.cnpj || '' };
-          }
-        });
+        // 1. Alertas pré-calculados
+        const dadosAlerta = snapAlerta.exists()
+          ? {
+              alertas:          snapAlerta.data().alertas          || [],
+              prospectosLivres: snapAlerta.data().prospectosLivres || [],
+              clientesInativos: snapAlerta.data().clientesInativos || [],
+            }
+          : { alertas: [], prospectosLivres: [], clientesInativos: [] };
 
-        // 2. Desistências
-        const todasDesistencias = new Set(snapDes.docs.map((d) => d.data().empresa));
-        const minhasDesistidas  = snapDes.docs
-          .filter((d) => d.data().vendedor === vendedorNome)
-          .map((d) => d.data().empresa);
+        // 2. Desistências deste vendedor
+        const minhasDesistidas = snapDes.docs.map((d) => d.data().empresa).filter(Boolean);
 
-        // 3. Agendamentos
+        // 3. Agendamentos deste vendedor
         const agMap  = {};
         const agList = [];
         snapAg.docs.forEach((d) => {
@@ -327,110 +311,44 @@ export default function LinhaDoTempo({ vendedorNome }) {
         });
         agList.sort((a, b) => a.dataAgendada.localeCompare(b.dataAgendada));
 
-        // 4. Prospectos Livres + Clientes Inativos (visita)
-        const livres     = [];
-        const inativosMap = {};
-        Object.entries(mapaGlobal).forEach(([empresa, info]) => {
-          if (todasDesistencias.has(empresa)) return;
-          const dias = diasDesde(info.lastDate);
-          if (dias === null) return;
-          const isCliente = !!info.cnpj;
-          if (!isCliente && dias >= LIMITE.prospecto.expira)
-            livres.push({ empresa, dias, lastDate: info.lastDate, vendedor: info.vendedor, estado: info.estado });
-          if (isCliente && dias >= LIMITE.cliente.expira)
-            inativosMap[empresa] = { empresa, cnpj: info.cnpj, dias, lastDate: info.lastDate, vendedor: info.vendedor, estado: info.estado, motivo: 'visita' };
-        });
-
-        // 5. Clientes Inativos por pedido (pedidosDia)
-        const porClientePed = {};
-        snapTodosPed.docs.forEach((d) => {
-          const p = d.data();
-          if (!p.cliente || !p.ultimaCompra) return;
-          const dias = diasDesde(p.ultimaCompra);
-          if (dias === null) return;
-          const resp = p.vendedorResponsavel || p.vendedor || '';
-          if (!porClientePed[p.cliente] || dias < porClientePed[p.cliente].dias)
-            porClientePed[p.cliente] = { dias, lastDate: p.ultimaCompra, vendedor: resp, estado: p.estado || extrairEstado(resp) };
-        });
-        Object.entries(porClientePed).forEach(([empresa, info]) => {
-          if (todasDesistencias.has(empresa)) return;
-          if (info.dias >= LIMITE.pedido.expira && !inativosMap[empresa])
-            inativosMap[empresa] = { empresa, cnpj: '', dias: info.dias, lastDate: info.lastDate, vendedor: info.vendedor, estado: info.estado, motivo: 'pedido' };
-        });
-
-        const livresOrdenados   = livres.sort((a, b) => b.dias - a.dias);
-        const inativosOrdenados = Object.values(inativosMap).sort((a, b) => b.dias - a.dias);
-
         // Salva no cache (4h)
         try {
           localStorage.setItem(cacheKey, JSON.stringify({
             ts: Date.now(),
-            visitasMap:       mapaVendedor,
-            desistidas:       minhasDesistidas,
-            agendamentosMap:  agMap,
+            alertasDiarios:  dadosAlerta,
+            desistidas:      minhasDesistidas,
+            agendamentosMap: agMap,
             agendamentosList: agList,
-            prospectosLivres: livresOrdenados,
-            clientesInativos: inativosOrdenados,
           }));
         } catch {}
 
-        setVisitasMap(mapaVendedor);
+        setAlertasDiarios(dadosAlerta);
         setDesistidas(new Set(minhasDesistidas));
         setAgendamentosMap(agMap);
         setAgendamentosList(agList);
-        setProspectosLivres(livresOrdenados);
-        setClientesInativos(inativosOrdenados);
       } catch (e) { console.error(e); }
     }
     carregarAlertas();
   }, [vendedorNome]);
 
-  // ── alertas computados ────────────────────────────────────
+  // ── alertas computados (lidos direto de alertas_diarios) ─
 
-  // Alertas de visita (relatorioVisitas)
-  const alertasVisita = Object.entries(visitasMap)
-    .filter(([emp]) => !desistidas.has(emp))
-    .flatMap(([empresa, info]) => {
-      const dias = diasDesde(info.lastDate);
-      if (dias === null) return [];
-      const isCliente = !!info.cnpj;
-      const tipo = isCliente ? 'cliente' : 'prospecto';
-      const L = isCliente ? LIMITE.cliente : LIMITE.prospecto;
-      if (dias < L.amarelo || dias >= L.expira) return [];
-      return [{ empresa, cnpj: info.cnpj, tipo, subTipo: 'visita', dias, lastDate: info.lastDate, nivel: nivelAlerta(dias, tipo) }];
-    });
+  // Filtra desistências e agendamentos feitos na sessão atual
+  const todosAlertas = (alertasDiarios?.alertas || [])
+    .filter((a) => !desistidas.has(a.empresa) && !agendamentosMap[a.empresa]);
 
-  // Alertas de pedido (pedidosDia — usa ultimaCompra por cliente)
-  const alertasPedido = (() => {
-    const porCliente = {};
-    itens.forEach((p) => {
-      if (!p.ultimaCompra || !p.cliente) return;
-      const dias = diasDesde(p.ultimaCompra);
-      if (dias === null) return;
-      if (!porCliente[p.cliente] || dias < porCliente[p.cliente].dias)
-        porCliente[p.cliente] = { dias, lastDate: p.ultimaCompra };
-    });
-    return Object.entries(porCliente)
-      .filter(([emp]) => !desistidas.has(emp))
-      .filter(([, i]) => i.dias >= LIMITE.pedido.amarelo && i.dias < LIMITE.pedido.expira)
-      .map(([empresa, i]) => ({
-        empresa, cnpj: '', tipo: 'cliente', subTipo: 'pedido',
-        dias: i.dias, lastDate: i.lastDate, nivel: nivelAlerta(i.dias, 'pedido'),
-      }));
-  })();
-
-  // Junta e ordena: vermelho primeiro, depois por mais dias
-  const todosAlertas = [...alertasVisita, ...alertasPedido]
-    .filter((a) => a.nivel && !agendamentosMap[a.empresa])
-    .sort((a, b) => (a.nivel === b.nivel ? b.dias - a.dias : a.nivel === 'vermelho' ? -1 : 1));
-
-  // Separados por nível
   const alertasVermelhos = todosAlertas.filter((a) => a.nivel === 'vermelho');
   const alertasAmarelos  = todosAlertas.filter((a) => a.nivel === 'amarelo');
 
   // Alertas com agendamento ativo (mostrados separados, mais discretos)
-  const alertasAgendados = [...alertasVisita, ...alertasPedido]
-    .filter((a) => a.nivel && agendamentosMap[a.empresa]);
+  const alertasAgendados = (alertasDiarios?.alertas || [])
+    .filter((a) => !desistidas.has(a.empresa) && !!agendamentosMap[a.empresa]);
+
+  // Listas de expirados derivadas do documento pré-calculado
+  const prospectosLivres = (alertasDiarios?.prospectosLivres || [])
+    .filter((p) => !desistidas.has(p.empresa));
+  const clientesInativos = (alertasDiarios?.clientesInativos || [])
+    .filter((p) => !desistidas.has(p.empresa));
 
   // ── ações ──────────────────────────────────────────────────
   async function confirmarAgendamento() {
@@ -744,7 +662,9 @@ export default function LinhaDoTempo({ vendedorNome }) {
                 color: modalAgendar.nivel === 'vermelho' ? '#dc2626' : '#d97706',
                 background: modalAgendar.nivel === 'vermelho' ? '#fee2e2' : '#fef3c7',
                 padding: '1px 7px', borderRadius: '20px' }}>
-                {modalAgendar.dias}d sem {modalAgendar.subTipo === 'pedido' ? 'pedido' : 'visita'}
+                {modalAgendar.subTipo === 'ambos'
+                  ? `${modalAgendar.diasVisita}d sem visita · ${modalAgendar.diasPedido}d sem pedido`
+                  : `${modalAgendar.dias}d sem ${modalAgendar.subTipo === 'pedido' ? 'pedido' : 'visita'}`}
               </span>
             </p>
 
@@ -752,13 +672,15 @@ export default function LinhaDoTempo({ vendedorNome }) {
             <input type="date"
               value={dataAgend}
               min={hojeISO()}
-              max={modalAgendar.tipo !== 'pedido' ? maxDataAgend(modalAgendar.lastDate, modalAgendar.tipo, modalAgendar.nivel) : undefined}
+              max={modalAgendar.tipo !== 'pedido'
+                ? maxDataAgend(modalAgendar.lastDateVisita || modalAgendar.lastDate, modalAgendar.tipo, modalAgendar.nivel)
+                : undefined}
               onChange={(e) => setDataAgend(e.target.value)}
               style={{ ...sa.input, marginBottom: '6px' }}
             />
             {modalAgendar.tipo !== 'pedido' && (
               <p style={{ margin: '0 0 18px', fontSize: '11px', color: '#9ca3af' }}>
-                Prazo máximo: {maxDataAgend(modalAgendar.lastDate, modalAgendar.tipo, modalAgendar.nivel).split('-').reverse().join('/')}
+                Prazo máximo: {maxDataAgend(modalAgendar.lastDateVisita || modalAgendar.lastDate, modalAgendar.tipo, modalAgendar.nivel).split('-').reverse().join('/')}
               </p>
             )}
 
@@ -1001,23 +923,30 @@ function AlertCard({ alerta, agendado, feito, onFeito, onInformar, onAgendar, on
   const isVermelho  = alerta.nivel === 'vermelho';
   const isProspecto = alerta.tipo === 'prospecto';
   const isPedido    = alerta.subTipo === 'pedido';
+  const isAmbos     = alerta.subTipo === 'ambos';
+  const escuro      = !!alerta.escuro;
 
   const nivCor  = isVermelho  ? '#dc2626' : '#d97706';
   const tipoCor = isProspecto ? '#7c3aed' : '#2563eb';
   const tipoBg  = isProspecto ? '#ede9fe' : '#dbeafe';
 
-  // aviso de expiração próxima (≤ 7 dias)
-  const restam = !isPedido ? (() => {
-    const L = isProspecto ? LIMITE.prospecto : LIMITE.cliente;
-    return L.expira - alerta.dias;
-  })() : null;
+  // Borda e fundo mais intensos quando o card é "escuro" (visita + pedido juntos)
+  const bordaCor = feito ? '#d1d5db'
+    : escuro ? (isVermelho ? '#991b1b' : '#92400e')
+    : nivCor;
+  const bgCard   = feito ? '#f9fafb'
+    : escuro ? (isVermelho ? '#fff1f2' : '#fffbeb')
+    : '#fff';
+
+  // Aviso de expiração próxima (≤ 7 dias), usa diasParaExpirar pré-calculado
+  const restam = (alerta.diasParaExpirar != null && !isPedido) ? alerta.diasParaExpirar : null;
 
   return (
     <div style={{
-      background: feito ? '#f9fafb' : '#fff',
+      background: bgCard,
       borderRadius: '10px',
-      border: '1px solid #e5e7eb',
-      borderTop: `3px solid ${feito ? '#d1d5db' : nivCor}`,
+      border: `1px solid ${escuro && !feito ? bordaCor + '55' : '#e5e7eb'}`,
+      borderTop: `3px solid ${bordaCor}`,
       padding: '10px',
       display: 'flex', flexDirection: 'column', gap: '5px',
       boxShadow: feito ? 'none' : '0 1px 3px rgba(0,0,0,0.07)',
@@ -1045,14 +974,38 @@ function AlertCard({ alerta, agendado, feito, onFeito, onInformar, onAgendar, on
         }}>
           {isProspecto ? 'Prospecto' : 'Cliente'}
         </span>
-        <span style={{
-          alignSelf: 'flex-start', fontSize: '10px', fontWeight: '700',
-          padding: '1px 6px', borderRadius: '20px',
-          background: feito ? '#f3f4f6' : (isVermelho ? '#fee2e2' : '#fef3c7'),
-          color: feito ? '#9ca3af' : nivCor,
-        }}>
-          {alerta.dias}d {isPedido ? 'sem pedido' : 'sem visita'}
-        </span>
+
+        {/* Badge(s) de dias — duplo quando subTipo === 'ambos' */}
+        {isAmbos ? (
+          <>
+            <span style={{
+              alignSelf: 'flex-start', fontSize: '10px', fontWeight: '700',
+              padding: '1px 6px', borderRadius: '20px',
+              background: feito ? '#f3f4f6' : (isVermelho ? '#fee2e2' : '#fef3c7'),
+              color: feito ? '#9ca3af' : nivCor,
+            }}>
+              {alerta.diasVisita}d sem visita
+            </span>
+            <span style={{
+              alignSelf: 'flex-start', fontSize: '10px', fontWeight: '700',
+              padding: '1px 6px', borderRadius: '20px',
+              background: feito ? '#f3f4f6' : (isVermelho ? '#fee2e2' : '#fef3c7'),
+              color: feito ? '#9ca3af' : nivCor,
+            }}>
+              {alerta.diasPedido}d sem pedido
+            </span>
+          </>
+        ) : (
+          <span style={{
+            alignSelf: 'flex-start', fontSize: '10px', fontWeight: '700',
+            padding: '1px 6px', borderRadius: '20px',
+            background: feito ? '#f3f4f6' : (isVermelho ? '#fee2e2' : '#fef3c7'),
+            color: feito ? '#9ca3af' : nivCor,
+          }}>
+            {alerta.dias}d {isPedido ? 'sem pedido' : 'sem visita'}
+          </span>
+        )}
+
         {agendado && !feito && (
           <span style={{ fontSize: '10px', fontWeight: '600', color: '#2563eb' }}>
             📅 {agendado.split('-').reverse().join('/')}
