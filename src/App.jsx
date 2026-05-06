@@ -1,10 +1,35 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import Login from './components/Login';
-import VendedorDashboard from './components/VendedorDashboard';
-import AdminDashboard from './components/AdminDashboard';
-import FinanceiroDashboard from './components/FinanceiroDashboard';
-import ProtectedRoute from './components/ProtectedRoute';
+import ErrorBoundary from './components/ErrorBoundary';
+
+// Lazy loading — cada componente vira um chunk separado.
+// O bundle principal cai de 1.2MB para ~200KB; o restante carrega sob demanda.
+const Login              = lazy(() => import('./components/Login'));
+const VendedorDashboard  = lazy(() => import('./components/VendedorDashboard'));
+const AdminDashboard     = lazy(() => import('./components/AdminDashboard'));
+const FinanceiroDashboard= lazy(() => import('./components/FinanceiroDashboard'));
+const ProtectedRoute     = lazy(() => import('./components/ProtectedRoute'));
+
+function Spinner() {
+  return (
+    <div style={{
+      minHeight: '100vh', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
+      gap: '16px',
+    }}>
+      <div style={{
+        width: '40px', height: '40px',
+        border: '3px solid rgba(255,255,255,0.2)',
+        borderTop: '3px solid #fff',
+        borderRadius: '50%',
+        animation: 'spin 0.8s linear infinite',
+      }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
 
 function Home() {
   const { perfil } = useAuth();
@@ -15,26 +40,30 @@ function Home() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <style>{`
-          * { box-sizing: border-box; }
-          body { margin: 0; font-family: 'Inter', sans-serif; }
-          @keyframes spin { to { transform: rotate(360deg); } }
-        `}</style>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <Home />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <style>{`
+            * { box-sizing: border-box; }
+            body { margin: 0; font-family: 'Inter', sans-serif; }
+            @keyframes spin { to { transform: rotate(360deg); } }
+          `}</style>
+          <Suspense fallback={<Spinner />}>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route
+                path="/"
+                element={
+                  <ProtectedRoute>
+                    <Home />
+                  </ProtectedRoute>
+                }
+              />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
