@@ -1191,8 +1191,8 @@ const s = {
   grupoLabel: { fontSize: '11px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' },
   subLabel:    { margin: '0 0 6px', fontSize: '11px', fontWeight: '600', color: '#6b7280' },
   alertaGrid:  {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+    display: 'flex',
+    flexDirection: 'column',
     gap: '8px',
     marginBottom: '4px',
   },

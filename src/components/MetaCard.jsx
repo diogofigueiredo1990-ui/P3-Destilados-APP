@@ -174,115 +174,89 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
       </div>
 
       {/*
-        ── RÉGUA DE PATAMARES ──────────────────────────────────────────
-        Os marcadores (labels + linhas) ficam ACIMA da barra colorida,
-        visiveis sobre o fundo branco do card. A linha desce e atravessa
-        a barra, servindo de referência visual sem tampar as zonas.
+        ── RÉGUA VERTICAL ──────────────────────────────────────────────
+        Barra vertical com zonas coloridas. Labels à esquerda com linhas
+        horizontais apontando para a posição correspondente.
       */}
-      <div style={{ position: 'relative', paddingTop: `${ABOVE}px`, marginBottom: '6px' }}>
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', minHeight: '190px' }}>
 
-        {/* Barra colorida (régua) */}
-        <div style={{
-          height: `${BAR_H}px`,
-          borderRadius: `${BAR_H / 2}px`,
-          overflow: 'hidden',
-          position: 'relative',
-          background: '#f3f4f6',
-        }}>
-          <div style={{ position: 'absolute', left: 0,                  top: 0, height: '100%', width: `${pct(queda)}%`,                          background: '#fecaca' }} />
-          <div style={{ position: 'absolute', left: `${pct(queda)}%`,   top: 0, height: '100%', width: `${pct(estab) - pct(queda)}%`,              background: '#fef08a' }} />
-          <div style={{ position: 'absolute', left: `${pct(estab)}%`,   top: 0, height: '100%', width: `${pct(crescMod) - pct(estab)}%`,           background: '#bbf7d0' }} />
-          <div style={{ position: 'absolute', left: `${pct(crescMod)}%`, top: 0, height: '100%', width: `${pct(crescAcent) - pct(crescMod)}%`,     background: '#86efac' }} />
-          <div style={{ position: 'absolute', left: `${pct(crescAcent)}%`, top: 0, height: '100%', width: `${100 - pct(crescAcent)}%`,             background: '#bfdbfe' }} />
+        {/* Labels à esquerda */}
+        <div style={{ flex: 1, position: 'relative' }}>
+          {markers.map((m) => {
+            const isMeta = m.label === 'Meta ★';
+            return (
+              <div key={m.label} style={{
+                position: 'absolute',
+                bottom: `${pct(m.v)}%`,
+                left: 0, right: 0,
+                transform: 'translateY(50%)',
+                display: 'flex', alignItems: 'center', gap: '5px',
+                pointerEvents: 'none',
+              }}>
+                <div style={{ width: '10px', height: '2px', background: m.cor, flexShrink: 0 }} />
+                <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
+                  <span style={{ fontSize: '11px', fontWeight: '700', color: m.cor, whiteSpace: 'nowrap' }}>{m.label}</span>
+                  {isMeta && <span style={{ fontSize: '10px', fontWeight: '600', color: m.cor }}>{moeda(crescMod)}</span>}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Marcador de Projeção */}
+          {eMesAtual && projecao > 0 && (
+            <div style={{
+              position: 'absolute',
+              bottom: `${Math.min(pct(projecao), 96)}%`,
+              left: 0, right: 0,
+              transform: 'translateY(50%)',
+              display: 'flex', alignItems: 'center', gap: '5px',
+              pointerEvents: 'none', zIndex: 4,
+            }}>
+              <div style={{ width: '10px', height: '0', borderTop: '2px dashed #1d4ed8', flexShrink: 0 }} />
+              <span style={{ fontSize: '11px', fontWeight: '700', color: '#1d4ed8', whiteSpace: 'nowrap' }}>Proj.</span>
+            </div>
+          )}
+
+          {/* Marcador do realizado */}
+          {fatAtual > 0 && (
+            <div style={{
+              position: 'absolute',
+              bottom: `${Math.min(pct(fatAtual), 96)}%`,
+              left: 0, right: 0,
+              transform: 'translateY(50%)',
+              display: 'flex', alignItems: 'center', gap: '5px',
+              pointerEvents: 'none', zIndex: 5,
+            }}>
+              <div style={{ width: '10px', height: '3px', background: solidColor, flexShrink: 0, borderRadius: '2px' }} />
+              <span style={{ fontSize: '11px', fontWeight: '700', color: solidColor, whiteSpace: 'nowrap' }}>Atual</span>
+            </div>
+          )}
         </div>
 
-        {/* Marcadores dos patamares: label acima + linha descendo pela barra */}
-        {markers.map((m) => {
-          const isMeta = m.label === 'Meta ★';
-          // Com valor extra na meta, o texto ocupa ~22px (label + valor); outros ~10px
-          const textH  = isMeta ? 22 : 10;
-          const lineH  = ABOVE - textH - 3 + BAR_H;
-          return (
-            <div key={m.label} style={{
-              position: 'absolute',
-              left: `${pct(m.v)}%`,
-              top: 0,
-              transform: 'translateX(-50%)',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              pointerEvents: 'none',
-              zIndex: 3,
-            }}>
-              <span style={{
-                fontSize: '10px', fontWeight: '700', color: m.cor,
-                whiteSpace: 'nowrap', lineHeight: 1,
-              }}>{m.label}</span>
-              {isMeta && (
-                <span style={{
-                  fontSize: '9px', fontWeight: '600', color: m.cor,
-                  whiteSpace: 'nowrap', lineHeight: 1, marginTop: '2px',
-                }}>{moeda(crescMod)}</span>
-              )}
-              <div style={{ width: '2px', height: `${lineH}px`, background: m.cor, borderRadius: '1px', marginTop: '3px' }} />
-            </div>
-          );
-        })}
+        {/* Barra vertical */}
+        <div style={{ width: '28px', position: 'relative', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', background: '#f3f4f6' }}>
+          {/* Zonas de cor — de baixo para cima */}
+          <div style={{ position: 'absolute', bottom: 0,                     left: 0, right: 0, height: `${pct(queda)}%`,                          background: '#fecaca' }} />
+          <div style={{ position: 'absolute', bottom: `${pct(queda)}%`,     left: 0, right: 0, height: `${pct(estab) - pct(queda)}%`,              background: '#fef08a' }} />
+          <div style={{ position: 'absolute', bottom: `${pct(estab)}%`,     left: 0, right: 0, height: `${pct(crescMod) - pct(estab)}%`,           background: '#bbf7d0' }} />
+          <div style={{ position: 'absolute', bottom: `${pct(crescMod)}%`,  left: 0, right: 0, height: `${pct(crescAcent) - pct(crescMod)}%`,      background: '#86efac' }} />
+          <div style={{ position: 'absolute', bottom: `${pct(crescAcent)}%`, left: 0, right: 0, height: `${100 - pct(crescAcent)}%`,               background: '#bfdbfe' }} />
 
-        {/* Marcador de Projeção */}
-        {eMesAtual && projecao > 0 && (
-          <div style={{
-            position: 'absolute',
-            left: `${Math.min(pct(projecao), 97)}%`,
-            top: 0,
-            transform: 'translateX(-50%)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            pointerEvents: 'none',
-            zIndex: 4,
-          }}>
-            <span style={{
-              fontSize: '10px', fontWeight: '700', color: '#1d4ed8',
-              whiteSpace: 'nowrap', lineHeight: 1,
-              marginBottom: '3px',
-            }}>Proj.</span>
-            <div style={{
-              width: '3px',
-              height: `${ABOVE - 13 + BAR_H}px`,
-              background: 'repeating-linear-gradient(180deg, #1d4ed8 0, #1d4ed8 4px, transparent 4px, transparent 7px)',
-              borderRadius: '2px',
-            }} />
-          </div>
-        )}
-      </div>
+          {/* Preenchimento do realizado */}
+          {fatAtual > 0 && (
+            <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${pct(fatAtual)}%`, background: 'rgba(0,0,0,0.18)', zIndex: 1 }} />
+          )}
 
-      {/*
-        ── BARRA PARALELA ──────────────────────────────────────────────
-        Mesma escala (pct) da régua acima.
-        Sólido = realizado. Pontilhado azul = projeção de fechamento.
-      */}
-      <div style={{ position: 'relative', height: '8px', background: '#f3f4f6', borderRadius: '4px', marginBottom: '20px' }}>
-        {fatAtual > 0 && (
-          <div style={{
-            position: 'absolute', left: 0, top: 0, height: '100%',
-            width: `${pct(fatAtual)}%`,
-            background: '#9ca3af',
-            borderRadius: '4px',
-            transition: 'width 0.4s',
-          }} />
-        )}
-        {eMesAtual && projecao > fatAtual && (
-          <div style={{
-            position: 'absolute',
-            left: `${pct(fatAtual)}%`,
-            top: 0,
-            height: '100%',
-            width: `${pct(projecao) - pct(fatAtual)}%`,
-            background: 'repeating-linear-gradient(90deg, rgba(29,78,216,0.45) 0, rgba(29,78,216,0.45) 5px, transparent 5px, transparent 9px)',
-            borderRadius: '0 4px 4px 0',
-          }} />
-        )}
+          {/* Linhas dos marcadores */}
+          {markers.map((m) => (
+            <div key={m.label} style={{ position: 'absolute', bottom: `${pct(m.v)}%`, left: 0, right: 0, height: '2px', background: m.cor, zIndex: 2 }} />
+          ))}
+
+          {/* Linha da projeção */}
+          {eMesAtual && projecao > 0 && (
+            <div style={{ position: 'absolute', bottom: `${Math.min(pct(projecao), 97)}%`, left: 0, right: 0, height: '3px', background: '#1d4ed8', zIndex: 3, opacity: 0.8 }} />
+          )}
+        </div>
       </div>
 
       {/* Resumo numérico */}

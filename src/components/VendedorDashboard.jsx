@@ -382,7 +382,7 @@ function RankingNiveis({ metricasVendedores, vendedorAtual }) {
           📅 Atualiza toda segunda · próx. {proximaSegunda()}
         </span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px 14px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '18px 14px' }}>
         {CRITERIOS.map(c => {
           const sorted = [...dados]
             .map(m => ({ nome: m.vendedor, idx: nivelIdx(m, c), val: Number(m[c.campoM] || 0) }))
@@ -1358,13 +1358,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
                     <span style={{ fontWeight: '700', fontSize: '14px', color: '#374151' }}>📋 Carteira completa</span>
                     <span style={{ fontSize: '12px', color: '#9ca3af' }}>ordenado por faturamento médio</span>
                   </div>
-                  {/* Cabeçalho */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 100px 100px 60px 80px', gap: '0', padding: '8px 16px', background: '#f8fafc', borderBottom: '1px solid #e5e7eb' }}>
-                    {['Cliente', 'Cidade', 'Pontuação', 'FMM', 'Score', 'Status'].map((h) => (
-                      <span key={h} style={{ fontSize: '11px', fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</span>
-                    ))}
-                  </div>
-                  {/* Linhas */}
+                  {/* Cards de clientes */}
                   {[...todosClientes]
                     .sort((a, b) => b.fatMedioMensal - a.fatMedioMensal)
                     .map((c, idx) => {
@@ -1374,32 +1368,29 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
                         <div
                           key={c.cnpj || c.nome}
                           style={{
-                            display: 'grid',
-                            gridTemplateColumns: '1fr 110px 100px 100px 60px 80px',
-                            gap: '0',
-                            padding: '9px 16px',
+                            padding: '12px 16px',
                             background: idx % 2 === 0 ? '#fff' : '#f8fafc',
                             borderBottom: '1px solid #f0f0f0',
-                            alignItems: 'center',
                           }}
                         >
-                          <span style={{ fontSize: '13px', fontWeight: '500', color: bloq ? '#dc2626' : '#111827', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            {bloq && <span title={c.statusBloqueio}>🔒</span>}
-                            {c.nome}
-                          </span>
-                          <span style={{ fontSize: '12px', color: '#6b7280' }}>{c.cidade || '—'}</span>
-                          <span style={{ fontSize: '13px', fontWeight: '600', color: c.pontuacao > 0 ? '#0f3460' : '#d1d5db' }}>
-                            {c.pontuacao > 0 ? moeda(c.pontuacao) : '—'}
-                          </span>
-                          <span style={{ fontSize: '13px', fontWeight: '600', color: '#111827' }}>
-                            {c.fatMedioMensal > 0 ? moeda(c.fatMedioMensal) : '—'}
-                          </span>
-                          <span style={{ fontSize: '13px', fontWeight: '600', color: '#374151' }}>
-                            {c.score != null ? c.score : '—'}
-                          </span>
-                          <span style={{ fontSize: '11px', padding: '2px 7px', borderRadius: '20px', fontWeight: '600', color: cor, background: bg, whiteSpace: 'nowrap', width: 'fit-content' }}>
-                            {c.status}
-                          </span>
+                          {/* Nome + status */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '5px' }}>
+                            <span style={{ fontSize: '13px', fontWeight: '600', color: bloq ? '#dc2626' : '#111827', flex: 1, lineHeight: '1.3' }}>
+                              {bloq && '🔒 '}{c.nome}
+                            </span>
+                            {c.status && (
+                              <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '20px', fontWeight: '600', color: cor, background: bg, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                {c.status}
+                              </span>
+                            )}
+                          </div>
+                          {/* Detalhes */}
+                          <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: '#6b7280', flexWrap: 'wrap' }}>
+                            {c.cidade && <span>{c.cidade}</span>}
+                            {c.fatMedioMensal > 0 && <span>FMM: <strong style={{ color: '#111827' }}>{moeda(c.fatMedioMensal)}</strong></span>}
+                            {c.pontuacao > 0 && <span>Pont: {moeda(c.pontuacao)}</span>}
+                            {c.score != null && <span>Score: {c.score}</span>}
+                          </div>
                         </div>
                       );
                     })}
@@ -1618,59 +1609,49 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
             ) : lideres.length === 0 ? (
               <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', margin: '16px 0' }}>Sem dados no período.</p>
             ) : (
-              <div>
-                <div style={{ display: 'grid', gridTemplateColumns: '28px 1fr 90px 1fr 1.4fr', gap: '0 8px', padding: '0 4px 6px', borderBottom: '1.5px solid #f0f0f0', marginBottom: '4px' }}>
-                  {['#', 'Categoria', 'Total', 'Vendedor destaque', `💡 Insight para você, ${nomeDisplay}`].map(h => (
-                    <span key={h} style={{ fontSize: '10px', fontWeight: '700', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</span>
-                  ))}
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {lideres.map((l, i) => {
-                  const isMe      = normalizarVendedor(l.destaqueVendedor) === normalizarVendedor(nome);
-                  const meuPct    = l.pctPorVendedor?.[nome] ?? null;
-                  const diff      = meuPct !== null ? l.destaquePercent - meuPct : null;
+                  const isMe       = normalizarVendedor(l.destaqueVendedor) === normalizarVendedor(nome);
+                  const meuPct     = l.pctPorVendedor?.[nome] ?? null;
+                  const diff       = meuPct !== null ? l.destaquePercent - meuPct : null;
                   const temInsight = diff !== null && diff > 15 && !isMe;
-                  const ordinal   = ['1º','2º','3º','4º','5º','6º','7º','8º','9º','10º'][i] || `${i+1}º`;
-                  const corOrd    = i === 0 ? '#d97706' : i === 1 ? '#6b7280' : i === 2 ? '#b45309' : '#9ca3af';
+                  const ordinal    = ['1º','2º','3º','4º','5º','6º','7º','8º','9º','10º'][i] || `${i+1}º`;
+                  const corOrd     = i === 0 ? '#d97706' : i === 1 ? '#6b7280' : i === 2 ? '#b45309' : '#9ca3af';
                   return (
                     <div
                       key={l.categoria}
                       style={{
-                        display: 'grid', gridTemplateColumns: '28px 1fr 90px 1fr 1.4fr', gap: '0 8px',
-                        padding: '9px 4px', borderBottom: '1px solid #f8fafc', alignItems: 'center',
-                        background: temInsight ? '#fefce8' : isMe ? '#eff6ff' : 'transparent',
-                        borderRadius: (temInsight || isMe) ? '6px' : '0',
+                        borderRadius: '10px',
+                        padding: '12px 14px',
+                        border: `1px solid ${temInsight ? '#fde68a' : isMe ? '#bfdbfe' : '#f0f0f0'}`,
+                        background: temInsight ? '#fefce8' : isMe ? '#eff6ff' : '#fff',
                       }}
                     >
-                      <span style={{ fontSize: '12px', fontWeight: '700', color: corOrd }}>{ordinal}</span>
-                      <span style={{ fontSize: '13px', fontWeight: '600', color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {l.categoria}
-                      </span>
-                      <span style={{ fontSize: '12px', color: '#374151', fontWeight: '500' }}>{moeda(l.totalFat)}</span>
-                      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                        <span style={{ fontSize: '12px', fontWeight: isMe ? '700' : '500', color: isMe ? '#1d4ed8' : '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {normalizarVendedor(l.destaqueVendedor || '—')}{isMe ? ' 👤' : ''}
-                        </span>
-                        <span style={{ fontSize: '11px', color: isMe ? '#3b82f6' : '#9ca3af' }}>
-                          {l.destaquePercent.toFixed(1)}% das vendas dele
-                        </span>
+                      {/* Linha 1: posição + categoria + total */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: corOrd }}>{ordinal}</span>
+                          <span style={{ fontSize: '14px', fontWeight: '700', color: '#111827' }}>{l.categoria}</span>
+                        </div>
+                        <span style={{ fontSize: '12px', color: '#6b7280', fontWeight: '500' }}>{moeda(l.totalFat)}</span>
                       </div>
-                      {/* ── Insight ── */}
-                      {temInsight ? (
-                        <div style={{ background: '#fef9c3', border: '1px solid #fde047', borderRadius: '6px', padding: '6px 8px', minWidth: 0 }}>
-                          <p style={{ margin: 0, fontSize: '11px', fontWeight: '700', color: '#854d0e' }}>
-                            🚀 Oportunidade!
-                          </p>
-                          <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#78350f', lineHeight: '1.35' }}>
-                            {normalizarVendedor(l.destaqueVendedor)} faz {l.destaquePercent.toFixed(1)}% nessa categoria,
-                            você faz {meuPct.toFixed(1)}%.
+                      {/* Linha 2: destaque */}
+                      <div style={{ fontSize: '12px', color: isMe ? '#1d4ed8' : '#6b7280', marginBottom: temInsight || isMe ? '8px' : '0' }}>
+                        {isMe ? '👤 Você é o destaque' : normalizarVendedor(l.destaqueVendedor || '—')}
+                        {' · '}{l.destaquePercent.toFixed(1)}% das vendas dele
+                        {meuPct !== null && !isMe && <span style={{ color: '#9ca3af' }}> · você: {meuPct.toFixed(1)}%</span>}
+                      </div>
+                      {/* Insight */}
+                      {temInsight && (
+                        <div style={{ background: '#fef3c7', borderRadius: '7px', padding: '8px 10px' }}>
+                          <p style={{ margin: 0, fontSize: '12px', fontWeight: '700', color: '#92400e' }}>🚀 Oportunidade!</p>
+                          <p style={{ margin: '3px 0 0', fontSize: '12px', color: '#78350f', lineHeight: '1.4' }}>
+                            {normalizarVendedor(l.destaqueVendedor)} faz {l.destaquePercent.toFixed(1)}% nessa categoria, você faz {meuPct.toFixed(1)}%.
                           </p>
                         </div>
-                      ) : isMe ? (
-                        <span style={{ fontSize: '11px', color: '#16a34a', fontWeight: '600' }}>✅ Você é o destaque!</span>
-                      ) : meuPct !== null ? (
-                        <span style={{ fontSize: '11px', color: '#9ca3af' }}>Você: {meuPct.toFixed(1)}%</span>
-                      ) : (
-                        <span style={{ fontSize: '11px', color: '#d1d5db' }}>—</span>
+                      )}
+                      {isMe && (
+                        <span style={{ fontSize: '12px', color: '#16a34a', fontWeight: '700' }}>✅ Você é o destaque!</span>
                       )}
                     </div>
                   );
