@@ -186,7 +186,7 @@ function BarCustomizada(props) {
 }
 
 // ── Componente principal ──────────────────────────────────────
-export default function GraficoVendasMensais({ vendedor = null, titulo = 'Faturamento Mensal', showTendencia = true }) {
+export default function GraficoVendasMensais({ vendedor = null, titulo = 'Faturamento Mensal', showTendencia = false }) {
   const [dados,             setDados]             = useState(null);
   const [carregando,        setCarregando]        = useState(true);
   const [crescendo,         setCrescendo]         = useState(null);
@@ -305,23 +305,25 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
         <p style={{ margin: 0, fontSize: '11px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           📊 {titulo}
         </p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          {r2 > 0 && (
-            <span style={{ fontSize: '10px', color: '#9ca3af' }}>
-              ajuste R²={r2.toFixed(2)}
-            </span>
-          )}
-          {crescendo !== null && inclinacaoMensal !== 0 && (
-            <span style={{
-              fontSize: '11px', fontWeight: '600', padding: '3px 9px',
-              borderRadius: '20px',
-              background: crescendo ? '#dcfce7' : '#fee2e2',
-              color:      crescendo ? '#16a34a' : '#dc2626',
-            }}>
-              {crescendo ? '▲' : '▼'} {moedaCompacta(Math.abs(inclinacaoMensal))}/mês
-            </span>
-          )}
-        </div>
+        {showTendencia && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {r2 > 0 && (
+              <span style={{ fontSize: '10px', color: '#9ca3af' }}>
+                ajuste R²={r2.toFixed(2)}
+              </span>
+            )}
+            {crescendo !== null && inclinacaoMensal !== 0 && (
+              <span style={{
+                fontSize: '11px', fontWeight: '600', padding: '3px 9px',
+                borderRadius: '20px',
+                background: crescendo ? '#dcfce7' : '#fee2e2',
+                color:      crescendo ? '#16a34a' : '#dc2626',
+              }}>
+                {crescendo ? '▲' : '▼'} {moedaCompacta(Math.abs(inclinacaoMensal))}/mês
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Gráfico */}
