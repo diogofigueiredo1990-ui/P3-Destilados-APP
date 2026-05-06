@@ -1044,6 +1044,15 @@ function ClienteCard({ grupo, feito, expandido, contato, vendedor, onToggle, onE
   const ativos      = grupo.produtos.filter((p) => !parouDeUsar(p));
   const parados     = grupo.produtos.filter((p) =>  parouDeUsar(p));
   const tGlobal     = tendenciaGlobal(ativos);
+
+  // Data da última compra do cliente (mais recente entre todos os produtos)
+  const ultimaCompraISO = grupo.produtos
+    .map((p) => p.ultimaCompra)
+    .filter(Boolean)
+    .sort()
+    .reverse()[0];
+  const ultimaCompraFmt = formatarData(ultimaCompraISO);
+  const diasUltimaCompra = ultimaCompraISO ? diasDesde(ultimaCompraISO) : null;
   const [selecionados, setSelecionados] = useState(new Set());
   const [copiado1, setCopiado1] = useState(false);
   const [copiado2, setCopiado2] = useState(false);
@@ -1120,6 +1129,17 @@ function ClienteCard({ grupo, feito, expandido, contato, vendedor, onToggle, onE
           <span style={{ fontSize: '12px', color: '#6b7280' }}>
             {ativos.length} {ativos.length === 1 ? 'produto' : 'produtos'}
             {parados.length > 0 && <span style={{ color: '#9ca3af' }}> · {parados.length} parou de usar</span>}
+            {ultimaCompraFmt && (
+              <span style={{
+                marginLeft: '6px',
+                fontSize: '11px', fontWeight: '600',
+                color: diasUltimaCompra >= 60 ? '#dc2626' : diasUltimaCompra >= 30 ? '#d97706' : '#16a34a',
+                background: diasUltimaCompra >= 60 ? '#fee2e2' : diasUltimaCompra >= 30 ? '#fef3c7' : '#dcfce7',
+                padding: '1px 7px', borderRadius: '20px',
+              }}>
+                🛒 {ultimaCompraFmt} ({diasUltimaCompra}d)
+              </span>
+            )}
           </span>
         </div>
 
