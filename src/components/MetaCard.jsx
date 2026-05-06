@@ -119,8 +119,73 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
   const hoje      = new Date();
   const eMesAtual = ano === hoje.getFullYear() && mes === hoje.getMonth() + 1;
 
+  const BAR_H_PX = 720;  // altura total da barra em px
   const barMax = Math.max(crescAcent * 1.2, projecao * 1.05, fatAtual * 1.05, 1);
   const pct    = (v) => Math.min((v / barMax) * 100, 100);
+
+  // ── Algoritmo de espaçamento mínimo para evitar sobreposição de labels ──
+  function spreadLabels(items) {
+    const MIN_PX  = 24;           // px mínimo a partir de baixo
+    const MAX_PX  = BAR_H_PX - 24; // px máximo (não ultrapassar o topo)
+    const SPACING = 46;           // espaçamento mínimo entre centros dos labels (px)
+
+    const sorted = [...items].sort((a, b) => a.idealPx - b.idealPx);
+    const px = sorted.map(l => l.idealPx);
+
+    // Passagem para cima: cada label deve estar ao menos SPACING acima do anterior
+    for (let i = 1; i < px.length; i++) {
+      px[i] = Math.max(px[i], px[i - 1] + SPACING);
+    }
+    // Se o topo transbordou, desce tudo
+    if (px[px.length - 1] > MAX_PX) {
+      const shift = px[px.length - 1] - MAX_PX;
+      for (let i = 0; i < px.length; i++) px[i] -= shift;
+    }
+    // Se agora o fundo transbordou, sobe tudo
+    if (px[0] < MIN_PX) {
+      const shift = MIN_PX - px[0];
+      for (let i = 0; i < px.length; i++) px[i] += shift;
+    }
+    // Limita o topo individual (caso extremo)
+    for (let i = px.length - 1; i >= 0; i--) {
+      if (px[i] > MAX_PX) px[i] = MAX_PX;
+    }
+
+    return sorted.map((l, i) => ({ ...l, placedPx: px[i] }));
+  }
+
+  // Monta a lista de todos os labels
+  const labelItems = [
+    ...markers.map(m => ({
+      id: m.label,
+      idealPx: (pct(m.v) / 100) * BAR_H_PX,
+      cor: m.cor,
+      line1: m.label,
+      line2: moeda(m.v),
+      bold: false,
+    })),
+  ];
+  if (eMesAtual && projecao > 0) {
+    labelItems.push({
+      id: 'proj',
+      idealPx: Math.min((pct(projecao) / 100) * BAR_H_PX, BAR_H_PX * 0.97),
+      cor: '#1d4ed8',
+      line1: '🔵 Projeção',
+      line2: moeda(projecao),
+      bold: false,
+    });
+  }
+  if (fatAtual > 0) {
+    labelItems.push({
+      id: 'atual',
+      idealPx: Math.min((pct(fatAtual) / 100) * BAR_H_PX, BAR_H_PX * 0.97),
+      cor: solidColor,
+      line1: '▶ Você agora',
+      line2: moeda(fatAtual),
+      bold: true,
+    });
+  }
+  const placedLabels = spreadLabels(labelItems);
 
   // Tendência baseada na projeção (mês atual) ou no realizado (mês passado)
   const refVal = eMesAtual && projecao > 0 ? projecao : fatAtual;
@@ -149,10 +214,6 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
     { v: crescAcent, label: 'Acentuado',    cor: '#0f3460' },
   ];
 
-  // Altura do espaço acima da régua (para os marcadores ficarem visíveis)
-  const ABOVE = 36; // px acima da barra colorida (maior p/ caber valor da meta)
-  const BAR_H = 18; // px altura da barra colorida
-
   return (
     <div style={s.card}>
       {/* Cabeçalho */}
@@ -174,7 +235,7 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
       </div>
 
       {/* ── RÉGUA VERTICAL ─────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: '0', marginBottom: '24px', height: '360px' }}>
+      <div style={{ display: 'flex', gap: '0', marginBottom: '24px', height: `${BAR_H_PX}px` }}>
 
         {/* Barra colorida (larga, à esquerda) */}
         <div style={{ width: '52px', position: 'relative', flexShrink: 0, borderRadius: '10px', overflow: 'hidden', background: '#f3f4f6' }}>
@@ -190,69 +251,43 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
             <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${pct(fatAtual)}%`, background: 'rgba(0,0,0,0.15)', zIndex: 1 }} />
           )}
 
-          {/* Linhas dos marcadores */}
+          {/* Linhas dos marcadores de zona — posição exata */}
           {markers.map((m) => (
             <div key={m.label} style={{ position: 'absolute', bottom: `${pct(m.v)}%`, left: 0, right: 0, height: '3px', background: m.cor, zIndex: 2 }} />
           ))}
 
-          {/* Linha da projeção (tracejada) */}
+          {/* Linha da projeção */}
           {eMesAtual && projecao > 0 && (
-            <div style={{ position: 'absolute', bottom: `${Math.min(pct(projecao), 97)}%`, left: 0, right: 0, height: '3px', background: '#1d4ed8', zIndex: 3 }} />
+            <div style={{ position: 'absolute', bottom: `${Math.min(pct(projecao), 98)}%`, left: 0, right: 0, height: '3px', background: '#1d4ed8', zIndex: 3 }} />
           )}
 
-          {/* Linha do realizado */}
+          {/* Linha do realizado (com brilho) */}
           {fatAtual > 0 && (
-            <div style={{ position: 'absolute', bottom: `${Math.min(pct(fatAtual), 97)}%`, left: 0, right: 0, height: '4px', background: solidColor, zIndex: 4, boxShadow: `0 0 6px ${solidColor}` }} />
+            <div style={{ position: 'absolute', bottom: `${Math.min(pct(fatAtual), 98)}%`, left: 0, right: 0, height: '4px', background: solidColor, zIndex: 4, boxShadow: `0 0 6px ${solidColor}` }} />
           )}
         </div>
 
-        {/* Labels à direita */}
+        {/* Labels à direita — posições ajustadas para não sobrepor */}
         <div style={{ flex: 1, position: 'relative', paddingLeft: '14px' }}>
-
-          {/* Marcadores de zona */}
-          {markers.map((m) => {
-            const isMeta = m.label === 'Meta ★';
+          {placedLabels.map((l) => {
+            const bottomPct = (l.placedPx / BAR_H_PX) * 100;
+            const isBold = l.bold;
             return (
-              <div key={m.label} style={{
-                position: 'absolute',
-                bottom: `${pct(m.v)}%`,
-                left: '14px', right: 0,
-                transform: 'translateY(50%)',
-                pointerEvents: 'none',
-              }}>
-                <div style={{ fontSize: '13px', fontWeight: '700', color: m.cor, lineHeight: 1.2 }}>{m.label}</div>
-                <div style={{ fontSize: '13px', fontWeight: '500', color: m.cor, lineHeight: 1.2 }}>{moeda(m.v)}</div>
+              <div
+                key={l.id}
+                style={{
+                  position: 'absolute',
+                  bottom: `${bottomPct}%`,
+                  left: '14px', right: 0,
+                  transform: 'translateY(50%)',
+                  pointerEvents: 'none',
+                }}
+              >
+                <div style={{ fontSize: isBold ? '14px' : '13px', fontWeight: isBold ? '800' : '700', color: l.cor, lineHeight: 1.25 }}>{l.line1}</div>
+                <div style={{ fontSize: isBold ? '14px' : '13px', fontWeight: isBold ? '700' : '500', color: l.cor, lineHeight: 1.25 }}>{l.line2}</div>
               </div>
             );
           })}
-
-          {/* Marcador de Projeção */}
-          {eMesAtual && projecao > 0 && (
-            <div style={{
-              position: 'absolute',
-              bottom: `${Math.min(pct(projecao), 94)}%`,
-              left: '14px', right: 0,
-              transform: 'translateY(50%)',
-              pointerEvents: 'none', zIndex: 4,
-            }}>
-              <div style={{ fontSize: '13px', fontWeight: '700', color: '#1d4ed8', lineHeight: 1.2 }}>🔵 Projeção</div>
-              <div style={{ fontSize: '13px', fontWeight: '500', color: '#1d4ed8', lineHeight: 1.2 }}>{moeda(projecao)}</div>
-            </div>
-          )}
-
-          {/* Marcador do realizado */}
-          {fatAtual > 0 && (
-            <div style={{
-              position: 'absolute',
-              bottom: `${Math.min(pct(fatAtual), 94)}%`,
-              left: '14px', right: 0,
-              transform: 'translateY(50%)',
-              pointerEvents: 'none', zIndex: 5,
-            }}>
-              <div style={{ fontSize: '14px', fontWeight: '800', color: solidColor, lineHeight: 1.2 }}>▶ Você agora</div>
-              <div style={{ fontSize: '14px', fontWeight: '700', color: solidColor, lineHeight: 1.2 }}>{moeda(fatAtual)}</div>
-            </div>
-          )}
         </div>
       </div>
 

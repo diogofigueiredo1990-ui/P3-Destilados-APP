@@ -1034,6 +1034,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
             { id: 'meta',     label: '📊 Painel Geral' },
             { id: 'extrato',  label: '💰 Extrato de Comissões' },
             { id: 'clientes', label: '🏢 Clientes' },
+            { id: 'produtos', label: '📦 Produtos' },
             { id: 'hoje',     label: '📅 Hoje' },
           ].map((a) => (
             <button
@@ -1407,7 +1408,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
         {/* ── ABA META ───────────────────────────────────── */}
         {aba === 'meta' && (<>
 
-          {/* ── Ranking compacto ── */}
+          {/* 1. Ranking compacto */}
           {metricasVendedores === null ? (
             <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', textAlign: 'center', color: '#9ca3af', fontSize: '13px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', marginBottom: '16px' }}>
               ⏳ Carregando ranking...
@@ -1420,23 +1421,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
             <RankingNiveis metricasVendedores={metricasVendedores} vendedorAtual={nome} />
           )}
 
-          <div style={styles.filtros}>
-            <select value={mes} onChange={(e) => setMes(Number(e.target.value))} style={styles.select}>
-              {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-            </select>
-            <select value={ano} onChange={(e) => setAno(Number(e.target.value))} style={styles.select}>
-              {anos.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </div>
-          <MetaCard vendedor={nome} mes={mes} ano={ano} fatAtual={totalFaturamento} />
-
-          {/* ── Gráfico de faturamento mensal ── */}
-          <GraficoVendasMensais
-            vendedor={nome}
-            titulo="Seu faturamento mensal · últimos 12 meses"
-          />
-
-          {/* ── Nível Comercial (painel pessoal — só para o próprio vendedor) ── */}
+          {/* 2. Nível Comercial (painel pessoal — só para o próprio vendedor) */}
           {metricasNivel && (
             <div style={{ background: '#fff', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', marginTop: '16px' }}>
 
@@ -1593,8 +1578,29 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
             </div>
           )}
 
-          {/* ── Líder de Vendas por Categoria de Produto ── */}
-          <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', marginTop: '16px' }}>
+          {/* 3. Filtros + Meta */}
+          <div style={styles.filtros}>
+            <select value={mes} onChange={(e) => setMes(Number(e.target.value))} style={styles.select}>
+              {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+            </select>
+            <select value={ano} onChange={(e) => setAno(Number(e.target.value))} style={styles.select}>
+              {anos.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+          <MetaCard vendedor={nome} mes={mes} ano={ano} fatAtual={totalFaturamento} />
+
+          {/* 4. Gráfico de faturamento mensal — sem linha de tendência */}
+          <GraficoVendasMensais
+            vendedor={nome}
+            titulo="Seu faturamento mensal · últimos 12 meses"
+            showTendencia={false}
+          />
+
+        </>)}
+
+        {/* ── ABA PRODUTOS ────────────────────────────────── */}
+        {aba === 'produtos' && (
+          <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>
               <p style={{ margin: 0, fontSize: '11px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 🥇 Líder de Vendas por Categoria · últimos 30 dias
@@ -1659,7 +1665,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
               </div>
             )}
           </div>
-        </>)}
+        )}
 
       </main>
     </div>

@@ -185,7 +185,7 @@ function BarCustomizada(props) {
 }
 
 // ── Componente principal ──────────────────────────────────────
-export default function GraficoVendasMensais({ vendedor = null, titulo = 'Faturamento Mensal' }) {
+export default function GraficoVendasMensais({ vendedor = null, titulo = 'Faturamento Mensal', showTendencia = true }) {
   const [dados,             setDados]             = useState(null);
   const [carregando,        setCarregando]        = useState(true);
   const [crescendo,         setCrescendo]         = useState(null);
@@ -375,7 +375,7 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
           />
 
           {/* Linha de tendência linear: histórico em laranja, projeção em roxo */}
-          {temTendencia && (
+          {temTendencia && showTendencia && (
             <Line
               dataKey="tendencia"
               type="linear"
@@ -392,8 +392,6 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
               activeDot={{ r: 4 }}
               connectNulls
               stroke="#f59e0b"
-              // A linha muda de cor nos meses futuros via custom dot, mas o traço continua o mesmo
-              // Para cor diferente no trecho futuro seria necessário dividir em dois Line separados
             />
           )}
         </ComposedChart>
@@ -409,7 +407,7 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
           <div style={{ width: '12px', height: '12px', background: '#93c5fd', borderRadius: '2px', flexShrink: 0 }} />
           <span style={{ fontSize: '10px', color: '#9ca3af' }}>Mês parcial</span>
         </div>
-        {temTendencia && (
+        {temTendencia && showTendencia && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
             <svg width="22" height="12" style={{ flexShrink: 0 }}>
               <line x1="0" y1="6" x2="22" y2="6" stroke="#f59e0b" strokeWidth="2" />
@@ -417,7 +415,7 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
             <span style={{ fontSize: '10px', color: '#9ca3af' }}>Tendência</span>
           </div>
         )}
-        {temTendencia && (
+        {temTendencia && showTendencia && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
             <svg width="22" height="12" style={{ flexShrink: 0 }}>
               <line x1="0" y1="6" x2="22" y2="6" stroke="#f59e0b" strokeWidth="2" />
