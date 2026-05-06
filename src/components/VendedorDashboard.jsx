@@ -532,7 +532,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
   const [carregando, setCarregando]     = useState(false);
   const [filtroAtrasado, setFiltroAtrasado] = useState(false);
   const [expandidos, setExpandidos]     = useState(new Set());
-  const [aba, setAba]                   = useState('meta');
+  const [aba, setAba]                   = useState('hoje');
   const [totalPago, setTotalPago]       = useState(0);
   const [todosClientes, setTodosClientes]           = useState([]);
   const [carregandoClientes, setCarregandoClientes] = useState(false);
