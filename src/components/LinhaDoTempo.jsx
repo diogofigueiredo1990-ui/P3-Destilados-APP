@@ -106,11 +106,28 @@ function tendenciaGlobal(ativos) {
   return { icon: '→', cor: '#d97706' };
 }
 
-function formatarData(val) {
+// Normaliza qualquer formato de data para ISO (YYYY-MM-DD) ou null
+function normalizarData(val) {
   if (!val) return null;
-  if (typeof val === 'string' && val.match(/^\d{4}-\d{2}-\d{2}/))
-    return val.slice(0, 10).split('-').reverse().join('/');
+  // ISO string: "2026-03-12" ou "2026-03-12T..."
+  if (typeof val === 'string' && val.match(/^\d{4}-\d{2}-\d{2}/)) return val.slice(0, 10);
+  // BR string: "12/03/2026"
+  if (typeof val === 'string' && val.match(/^\d{2}\/\d{2}\/\d{4}/)) {
+    const [d, m, y] = val.split('/'); return `${y}-${m}-${d}`;
+  }
+  // Firestore Timestamp com .toDate()
+  if (val && typeof val.toDate === 'function') return val.toDate().toISOString().slice(0, 10);
+  // Firestore Timestamp com .seconds
+  if (val && val.seconds) return new Date(val.seconds * 1000).toISOString().slice(0, 10);
+  // Date nativo
+  if (val instanceof Date && !isNaN(val)) return val.toISOString().slice(0, 10);
   return null;
+}
+
+function formatarData(val) {
+  const iso = normalizarData(val);
+  if (!iso) return null;
+  return iso.split('-').reverse().join('/');
 }
 
 function corEstoque(val) {
@@ -1047,11 +1064,11 @@ function ClienteCard({ grupo, feito, expandido, contato, vendedor, onToggle, onE
 
   // Data da última compra do cliente (mais recente entre todos os produtos)
   const ultimaCompraISO = grupo.produtos
-    .map((p) => p.ultimaCompra)
+    .map((p) => normalizarData(p.ultimaCompra))
     .filter(Boolean)
     .sort()
-    .reverse()[0];
-  const ultimaCompraFmt = formatarData(ultimaCompraISO);
+    .reverse()[0] || null;
+  const ultimaCompraFmt  = ultimaCompraISO ? ultimaCompraISO.split('-').reverse().join('/') : null;
   const diasUltimaCompra = ultimaCompraISO ? diasDesde(ultimaCompraISO) : null;
   const [selecionados, setSelecionados] = useState(new Set());
   const [copiado1, setCopiado1] = useState(false);
