@@ -173,31 +173,55 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
         ))}
       </div>
 
-      {/*
-        ── RÉGUA VERTICAL ──────────────────────────────────────────────
-        Barra vertical com zonas coloridas. Labels à esquerda com linhas
-        horizontais apontando para a posição correspondente.
-      */}
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', minHeight: '190px' }}>
+      {/* ── RÉGUA VERTICAL ─────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: '0', marginBottom: '24px', height: '360px' }}>
 
-        {/* Labels à esquerda */}
-        <div style={{ flex: 1, position: 'relative' }}>
+        {/* Barra colorida (larga, à esquerda) */}
+        <div style={{ width: '52px', position: 'relative', flexShrink: 0, borderRadius: '10px', overflow: 'hidden', background: '#f3f4f6' }}>
+          {/* Zonas de cor — de baixo para cima */}
+          <div style={{ position: 'absolute', bottom: 0,                      left: 0, right: 0, height: `${pct(queda)}%`,                         background: '#fecaca' }} />
+          <div style={{ position: 'absolute', bottom: `${pct(queda)}%`,      left: 0, right: 0, height: `${pct(estab) - pct(queda)}%`,             background: '#fef08a' }} />
+          <div style={{ position: 'absolute', bottom: `${pct(estab)}%`,      left: 0, right: 0, height: `${pct(crescMod) - pct(estab)}%`,          background: '#bbf7d0' }} />
+          <div style={{ position: 'absolute', bottom: `${pct(crescMod)}%`,   left: 0, right: 0, height: `${pct(crescAcent) - pct(crescMod)}%`,     background: '#86efac' }} />
+          <div style={{ position: 'absolute', bottom: `${pct(crescAcent)}%`, left: 0, right: 0, height: `${100 - pct(crescAcent)}%`,               background: '#bfdbfe' }} />
+
+          {/* Preenchimento translúcido do realizado */}
+          {fatAtual > 0 && (
+            <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${pct(fatAtual)}%`, background: 'rgba(0,0,0,0.15)', zIndex: 1 }} />
+          )}
+
+          {/* Linhas dos marcadores */}
+          {markers.map((m) => (
+            <div key={m.label} style={{ position: 'absolute', bottom: `${pct(m.v)}%`, left: 0, right: 0, height: '3px', background: m.cor, zIndex: 2 }} />
+          ))}
+
+          {/* Linha da projeção (tracejada) */}
+          {eMesAtual && projecao > 0 && (
+            <div style={{ position: 'absolute', bottom: `${Math.min(pct(projecao), 97)}%`, left: 0, right: 0, height: '3px', background: '#1d4ed8', zIndex: 3 }} />
+          )}
+
+          {/* Linha do realizado */}
+          {fatAtual > 0 && (
+            <div style={{ position: 'absolute', bottom: `${Math.min(pct(fatAtual), 97)}%`, left: 0, right: 0, height: '4px', background: solidColor, zIndex: 4, boxShadow: `0 0 6px ${solidColor}` }} />
+          )}
+        </div>
+
+        {/* Labels à direita */}
+        <div style={{ flex: 1, position: 'relative', paddingLeft: '14px' }}>
+
+          {/* Marcadores de zona */}
           {markers.map((m) => {
             const isMeta = m.label === 'Meta ★';
             return (
               <div key={m.label} style={{
                 position: 'absolute',
                 bottom: `${pct(m.v)}%`,
-                left: 0, right: 0,
+                left: '14px', right: 0,
                 transform: 'translateY(50%)',
-                display: 'flex', alignItems: 'center', gap: '5px',
                 pointerEvents: 'none',
               }}>
-                <div style={{ width: '10px', height: '2px', background: m.cor, flexShrink: 0 }} />
-                <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-                  <span style={{ fontSize: '11px', fontWeight: '700', color: m.cor, whiteSpace: 'nowrap' }}>{m.label}</span>
-                  {isMeta && <span style={{ fontSize: '12px', fontWeight: '600', color: m.cor }}>{moeda(crescMod)}</span>}
-                </div>
+                <div style={{ fontSize: '13px', fontWeight: '700', color: m.cor, lineHeight: 1.2 }}>{m.label}</div>
+                <div style={{ fontSize: '13px', fontWeight: '500', color: m.cor, lineHeight: 1.2 }}>{moeda(m.v)}</div>
               </div>
             );
           })}
@@ -206,14 +230,13 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
           {eMesAtual && projecao > 0 && (
             <div style={{
               position: 'absolute',
-              bottom: `${Math.min(pct(projecao), 96)}%`,
-              left: 0, right: 0,
+              bottom: `${Math.min(pct(projecao), 94)}%`,
+              left: '14px', right: 0,
               transform: 'translateY(50%)',
-              display: 'flex', alignItems: 'center', gap: '5px',
               pointerEvents: 'none', zIndex: 4,
             }}>
-              <div style={{ width: '10px', height: '0', borderTop: '2px dashed #1d4ed8', flexShrink: 0 }} />
-              <span style={{ fontSize: '11px', fontWeight: '700', color: '#1d4ed8', whiteSpace: 'nowrap' }}>Proj.</span>
+              <div style={{ fontSize: '13px', fontWeight: '700', color: '#1d4ed8', lineHeight: 1.2 }}>🔵 Projeção</div>
+              <div style={{ fontSize: '13px', fontWeight: '500', color: '#1d4ed8', lineHeight: 1.2 }}>{moeda(projecao)}</div>
             </div>
           )}
 
@@ -221,40 +244,14 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
           {fatAtual > 0 && (
             <div style={{
               position: 'absolute',
-              bottom: `${Math.min(pct(fatAtual), 96)}%`,
-              left: 0, right: 0,
+              bottom: `${Math.min(pct(fatAtual), 94)}%`,
+              left: '14px', right: 0,
               transform: 'translateY(50%)',
-              display: 'flex', alignItems: 'center', gap: '5px',
               pointerEvents: 'none', zIndex: 5,
             }}>
-              <div style={{ width: '10px', height: '3px', background: solidColor, flexShrink: 0, borderRadius: '2px' }} />
-              <span style={{ fontSize: '11px', fontWeight: '700', color: solidColor, whiteSpace: 'nowrap' }}>Atual</span>
+              <div style={{ fontSize: '14px', fontWeight: '800', color: solidColor, lineHeight: 1.2 }}>▶ Você agora</div>
+              <div style={{ fontSize: '14px', fontWeight: '700', color: solidColor, lineHeight: 1.2 }}>{moeda(fatAtual)}</div>
             </div>
-          )}
-        </div>
-
-        {/* Barra vertical */}
-        <div style={{ width: '28px', position: 'relative', flexShrink: 0, borderRadius: '6px', overflow: 'hidden', background: '#f3f4f6' }}>
-          {/* Zonas de cor — de baixo para cima */}
-          <div style={{ position: 'absolute', bottom: 0,                     left: 0, right: 0, height: `${pct(queda)}%`,                          background: '#fecaca' }} />
-          <div style={{ position: 'absolute', bottom: `${pct(queda)}%`,     left: 0, right: 0, height: `${pct(estab) - pct(queda)}%`,              background: '#fef08a' }} />
-          <div style={{ position: 'absolute', bottom: `${pct(estab)}%`,     left: 0, right: 0, height: `${pct(crescMod) - pct(estab)}%`,           background: '#bbf7d0' }} />
-          <div style={{ position: 'absolute', bottom: `${pct(crescMod)}%`,  left: 0, right: 0, height: `${pct(crescAcent) - pct(crescMod)}%`,      background: '#86efac' }} />
-          <div style={{ position: 'absolute', bottom: `${pct(crescAcent)}%`, left: 0, right: 0, height: `${100 - pct(crescAcent)}%`,               background: '#bfdbfe' }} />
-
-          {/* Preenchimento do realizado */}
-          {fatAtual > 0 && (
-            <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${pct(fatAtual)}%`, background: 'rgba(0,0,0,0.18)', zIndex: 1 }} />
-          )}
-
-          {/* Linhas dos marcadores */}
-          {markers.map((m) => (
-            <div key={m.label} style={{ position: 'absolute', bottom: `${pct(m.v)}%`, left: 0, right: 0, height: '2px', background: m.cor, zIndex: 2 }} />
-          ))}
-
-          {/* Linha da projeção */}
-          {eMesAtual && projecao > 0 && (
-            <div style={{ position: 'absolute', bottom: `${Math.min(pct(projecao), 97)}%`, left: 0, right: 0, height: '3px', background: '#1d4ed8', zIndex: 3, opacity: 0.8 }} />
           )}
         </div>
       </div>
