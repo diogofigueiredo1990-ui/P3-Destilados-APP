@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { hojeISO, dataParaISO } from '../utils/data';
 import {
   ComposedChart, Bar, Line,
@@ -123,14 +123,16 @@ function montarMeses() {
 // ── Tooltip customizado ───────────────────────────────────────
 function TooltipCustom({ active, payload }) {
   if (!active || !payload?.length) return null;
-  const entry   = payload[0]?.payload;
-  const fat     = entry?.faturamento ?? null;
-  const tend    = entry?.tendencia   ?? null;
-  const parcial = entry?.parcial;
-  const futuro  = entry?.futuro;
-  const label   = entry?.label;
+  const entry    = payload[0]?.payload;
+  const fat      = entry?.faturamento ?? null;
+  const fatReal  = entry?.fatReal     ?? null; // faturamento real (quando projetado=true)
+  const tend     = entry?.tendencia   ?? null;
+  const parcial  = entry?.parcial;
+  const projetado= entry?.projetado;
+  const futuro   = entry?.futuro;
+  const label    = entry?.label;
 
-  const diff = (!parcial && !futuro && fat !== null && tend !== null && tend > 0)
+  const diff = (!parcial && !projetado && !futuro && fat !== null && tend !== null && tend > 0)
     ? ((fat - tend) / tend) * 100
     : null;
 
@@ -143,14 +145,20 @@ function TooltipCustom({ active, payload }) {
     }}>
       <p style={{ margin: '0 0 6px', fontWeight: '700', fontSize: '12px', color: futuro ? '#9ca3af' : '#374151' }}>
         {label}
-        {parcial && <span style={{ fontWeight: '400', color: '#9ca3af' }}> · mês parcial</span>}
-        {futuro  && <span style={{ fontWeight: '400', color: '#9ca3af' }}> · projeção</span>}
+        {projetado && <span style={{ fontWeight: '400', color: '#6366f1' }}> · projeção</span>}
+        {parcial && !projetado && <span style={{ fontWeight: '400', color: '#9ca3af' }}> · mês parcial</span>}
+        {futuro  && <span style={{ fontWeight: '400', color: '#9ca3af' }}> · futuro</span>}
       </p>
 
       {fat !== null && (
-        <p style={{ margin: 0, fontSize: '13px', color: '#0f3460', fontWeight: '600' }}>
-          📦 {moedaFull(fat)}
-          {parcial && <span style={{ fontWeight: '400', color: '#9ca3af', fontSize: '11px' }}> (até hoje)</span>}
+        <p style={{ margin: 0, fontSize: '13px', color: projetado ? '#6366f1' : '#0f3460', fontWeight: '600' }}>
+          {projetado ? '🔮' : '📦'} {moedaFull(fat)}
+          {projetado && fatReal !== null && (
+            <span style={{ fontWeight: '400', color: '#9ca3af', fontSize: '11px', display: 'block', marginTop: '2px' }}>
+              Atual: {moedaFull(fatReal)}
+            </span>
+          )}
+          {parcial && !projetado && <span style={{ fontWeight: '400', color: '#9ca3af', fontSize: '11px' }}> (até hoje)</span>}
         </p>
       )}
 
@@ -172,21 +180,24 @@ function TooltipCustom({ active, payload }) {
   );
 }
 
-// ── Barra com cor condicional (parcial = azul claro) ─────────
+// ── Barra com cor condicional ─────────────────────────────────
+// projetado = roxo (projeção de fechamento do mês)
+// parcial   = azul claro (mês atual sem projeção)
+// normal    = azul escuro
 function BarCustomizada(props) {
-  const { x, y, width, height, parcial } = props;
+  const { x, y, width, height, parcial, projetado } = props;
   if (!height || height <= 0) return null;
-  return (
-    <rect
-      x={x} y={y} width={width} height={height}
-      fill={parcial ? '#93c5fd' : '#0f3460'}
-      rx={3} ry={3}
-    />
-  );
+  const fill = projetado ? '#6366f1' : parcial ? '#93c5fd' : '#0f3460';
+  return <rect x={x} y={y} width={width} height={height} fill={fill} rx={3} ry={3} />;
 }
 
 // ── Componente principal ──────────────────────────────────────
-export default function GraficoVendasMensais({ vendedor = null, titulo = 'Faturamento Mensal', showTendencia = false }) {
+export default function GraficoVendasMensais({
+  vendedor = null,
+  titulo = 'Faturamento Mensal',
+  showTendencia = false,
+  projecaoMesAtual = null,  // se informado, substitui a barra do mês parcial pela projeção
+}) {
   const [dados,             setDados]             = useState(null);
   const [carregando,        setCarregando]        = useState(true);
   const [crescendo,         setCrescendo]         = useState(null);
@@ -282,11 +293,21 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
 
   if (!dados || dados.length === 0) return null;
 
-  const temTendencia = dados.some(d => d.tendencia !== null);
+  // Se projecaoMesAtual informado, sobrepõe a barra do mês parcial com a projeção de fechamento
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const dadosExibidos = useMemo(() => {
+    if (!dados || projecaoMesAtual === null) return dados;
+    return dados.map(d =>
+      d.parcial
+        ? { ...d, faturamento: Math.round(projecaoMesAtual), projetado: true, fatReal: d.faturamento }
+        : d
+    );
+  }, [dados, projecaoMesAtual]);
+
+  const temTendencia = dadosExibidos.some(d => d.tendencia !== null);
 
   // Escala do eixo Y: usa apenas os meses históricos (não projeções futuras)
-  // para evitar que uma tendência muito alta/baixa distorça a escala das barras
-  const historico    = dados.filter(d => !d.futuro);
+  const historico    = dadosExibidos.filter(d => !d.futuro);
   const maxFat       = Math.max(...historico.map(d => d.faturamento ?? 0), 1);
   const maxTend      = temTendencia ? Math.max(...historico.map(d => d.tendencia ?? 0), 0) : 0;
   const yMax         = Math.max(maxFat, maxTend) * 1.25;
@@ -328,13 +349,13 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
 
       {/* Gráfico */}
       <ResponsiveContainer width="100%" height={230}>
-        <ComposedChart data={dados} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+        <ComposedChart data={dadosExibidos} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
 
           <XAxis
             dataKey="label"
             tick={({ x, y, payload }) => {
-              const item = dados.find(d => d.label === payload.value);
+              const item = dadosExibidos.find(d => d.label === payload.value);
               return (
                 <text x={x} y={y + 10} textAnchor="middle" fill={item?.futuro ? '#c4b5fd' : '#9ca3af'} fontSize={10}>
                   {payload.value}
@@ -366,18 +387,18 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
             label={{ value: 'hoje', position: 'top', fontSize: 9, fill: '#d1d5db', dy: -4 }}
           />
 
-          {/* Barras de faturamento — azul escuro (histórico) ou azul claro (mês parcial) */}
+          {/* Barras de faturamento — azul escuro (histórico), azul claro (parcial), roxo (projeção) */}
           <Bar
             dataKey="faturamento"
             maxBarSize={36}
             name="Faturamento"
             shape={(props) => {
-              const item = props.parcial ?? props?.item?.parcial ?? dados[props?.index]?.parcial;
-              return <BarCustomizada {...props} parcial={dados[props?.index]?.parcial} />;
+              const item = dadosExibidos[props?.index];
+              return <BarCustomizada {...props} parcial={item?.parcial} projetado={item?.projetado} />;
             }}
           />
 
-          {/* Linha de tendência linear: histórico em laranja, projeção em roxo */}
+          {/* Linha de tendência linear */}
           {temTendencia && showTendencia && (
             <Line
               dataKey="tendencia"
@@ -385,8 +406,8 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
               stroke="#f59e0b"
               strokeWidth={2}
               dot={({ cx, cy, index }) => {
-                const item = dados[index];
-                if (!item?.futuro) return null; // sem ponto nos meses históricos
+                const item = dadosExibidos[index];
+                if (!item?.futuro) return null;
                 return (
                   <circle key={`dot-${index}`} cx={cx} cy={cy} r={4}
                     fill="#6366f1" stroke="#fff" strokeWidth={2} />
@@ -394,7 +415,6 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
               }}
               activeDot={{ r: 4 }}
               connectNulls
-              stroke="#f59e0b"
             />
           )}
         </ComposedChart>
@@ -406,10 +426,17 @@ export default function GraficoVendasMensais({ vendedor = null, titulo = 'Fatura
           <div style={{ width: '12px', height: '12px', background: '#0f3460', borderRadius: '2px', flexShrink: 0 }} />
           <span style={{ fontSize: '10px', color: '#9ca3af' }}>Faturamento</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-          <div style={{ width: '12px', height: '12px', background: '#93c5fd', borderRadius: '2px', flexShrink: 0 }} />
-          <span style={{ fontSize: '10px', color: '#9ca3af' }}>Mês parcial</span>
-        </div>
+        {projecaoMesAtual !== null ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <div style={{ width: '12px', height: '12px', background: '#6366f1', borderRadius: '2px', flexShrink: 0 }} />
+            <span style={{ fontSize: '10px', color: '#9ca3af' }}>Projeção mês atual</span>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <div style={{ width: '12px', height: '12px', background: '#93c5fd', borderRadius: '2px', flexShrink: 0 }} />
+            <span style={{ fontSize: '10px', color: '#9ca3af' }}>Mês parcial</span>
+          </div>
+        )}
         {temTendencia && showTendencia && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
             <svg width="22" height="12" style={{ flexShrink: 0 }}>

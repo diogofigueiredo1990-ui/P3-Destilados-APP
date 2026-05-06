@@ -28,3 +28,31 @@ export function dataParaISO(date) {
 export function hojeISO() {
   return dataParaISO(new Date());
 }
+
+/** Total de dias úteis (seg–sex) no mês `mes` do ano `ano`. */
+export function diasUteisNoMes(ano, mes) {
+  let count = 0;
+  const total = new Date(ano, mes, 0).getDate();
+  for (let d = 1; d <= total; d++) {
+    const dow = new Date(ano, mes - 1, d).getDay();
+    if (dow !== 0 && dow !== 6) count++;
+  }
+  return count;
+}
+
+/**
+ * Dias úteis já passados no mês `mes`/`ano` até hoje.
+ * Se for mês futuro ou passado, retorna o total do mês.
+ */
+export function diasUteisPassados(ano, mes) {
+  const hoje = new Date();
+  const ultimoDia = new Date(ano, mes, 0).getDate();
+  const limite = (ano === hoje.getFullYear() && mes === hoje.getMonth() + 1)
+    ? hoje.getDate() : ultimoDia;
+  let count = 0;
+  for (let d = 1; d <= limite; d++) {
+    const dow = new Date(ano, mes - 1, d).getDay();
+    if (dow !== 0 && dow !== 6) count++;
+  }
+  return count;
+}

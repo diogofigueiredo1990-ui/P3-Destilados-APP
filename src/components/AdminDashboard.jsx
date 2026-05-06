@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
+import { diasUteisNoMes, diasUteisPassados } from '../utils/data';
 import VendedorDashboard from './VendedorDashboard';
 import MetaCard from './MetaCard';
 import GraficoVendasMensais from './GraficoVendasMensais';
@@ -89,7 +90,14 @@ export default function AdminDashboard() {
   }
 
   const totalGeral = resumo.reduce((s, r) => s + r.comissao, 0);
-  const fatGeral = resumo.reduce((s, r) => s + r.faturamento, 0);
+  const fatGeral   = resumo.reduce((s, r) => s + r.faturamento, 0);
+
+  // Projeção de fechamento do mês (soma das projeções individuais = fat_total / du_passados * du_total)
+  // Só aplica ao mês atual; para meses passados o gráfico mostra o valor real
+  const ehMesAtual = mes === hoje.getMonth() + 1 && ano === hoje.getFullYear();
+  const duPass     = diasUteisPassados(ano, mes);
+  const duTotal    = diasUteisNoMes(ano, mes);
+  const projecaoEquipe = ehMesAtual && duPass > 0 ? Math.round((fatGeral / duPass) * duTotal) : null;
 
   return (
     <div style={styles.page}>
@@ -148,6 +156,7 @@ export default function AdminDashboard() {
           <GraficoVendasMensais
             vendedor={null}
             titulo="Faturamento total da equipe · últimos 12 meses"
+            projecaoMesAtual={projecaoEquipe}
           />
         )}
 
