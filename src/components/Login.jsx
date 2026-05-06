@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -7,8 +7,13 @@ export default function Login() {
   const [senha, setSenha] = useState('');
   const [erro, setErro] = useState('');
   const [carregando, setCarregando] = useState(false);
-  const { login } = useAuth();
+  const { login, usuario } = useAuth();
   const navigate = useNavigate();
+
+  // Redireciona assim que o AuthContext confirmar o login (evita race condition)
+  useEffect(() => {
+    if (usuario) navigate('/', { replace: true });
+  }, [usuario]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -16,12 +21,14 @@ export default function Login() {
     setCarregando(true);
     try {
       await login(email, senha);
-      navigate('/');
+      // Não navega aqui — o useEffect acima cuida do redirect
+      // quando onAuthStateChanged atualizar usuario
     } catch {
       setErro('E-mail ou senha incorretos.');
-    } finally {
       setCarregando(false);
     }
+    // Não chama setCarregando(false) em caso de sucesso:
+    // o spinner fica até o redirect acontecer
   }
 
   return (
