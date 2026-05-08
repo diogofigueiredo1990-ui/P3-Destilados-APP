@@ -179,6 +179,7 @@ export default function LinhaDoTempo({ vendedorNome, nivelAtual }) {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro]             = useState(null);
   const [pedidosHoje, setPedidosHoje] = useState([]);
+  const [visitasHoje, setVisitasHoje] = useState([]);
 
   // alertas
   const [alertasDiarios, setAlertasDiarios] = useState(null); // { alertas, prospectosLivres, clientesInativos }
@@ -377,6 +378,45 @@ export default function LinhaDoTempo({ vendedorNome, nivelAtual }) {
       } catch (e) { console.error(e); }
     }
     carregarAlertas();
+  }, [vendedorNome]);
+
+  // ── visitas realizadas hoje (relatorioVisitas) ────────────────
+  useEffect(() => {
+    if (!vendedorNome) return;
+    const hoje = hojeISO(); // "2026-05-08"
+    const slugV = vendedorNome.toLowerCase().replace(/\s+/g, '_');
+    const slugSem = vendedorNome.replace(/\s+[A-Z]{2}$/, '').trim().toLowerCase().replace(/\s+/g, '_');
+
+    async function carregarVisitasHoje() {
+      try {
+        // Busca docs do vendedor usando prefixo do slug
+        const snapV = await getDocs(query(
+          collection(db, 'relatorioVisitas'),
+          where(documentId(), '>=', slugSem + '_'),
+          where(documentId(), '<',  slugSem + '_'),
+        ));
+        // Também tenta com slug completo se diferente
+        let docs = snapV.docs;
+        if (slugV !== slugSem && snapV.empty) {
+          const snapV2 = await getDocs(query(
+            collection(db, 'relatorioVisitas'),
+            where(documentId(), '>=', slugV + '_'),
+            where(documentId(), '<',  slugV + '_'),
+          ));
+          docs = snapV2.docs;
+        }
+        // Filtra apenas as de hoje pelo campo dataHoraVisita
+        const deHoje = docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(d => {
+            const dhv = d.dataHoraVisita || d.carimbo || '';
+            return String(dhv).startsWith(hoje);
+          })
+          .sort((a, b) => String(a.dataHoraVisita || '').localeCompare(String(b.dataHoraVisita || '')));
+        setVisitasHoje(deHoje);
+      } catch (e) { console.error('[visitasHoje]', e); }
+    }
+    carregarVisitasHoje();
   }, [vendedorNome]);
 
   // ── busca telefones pelo CNPJ dos alertas ────────────────────
@@ -802,7 +842,35 @@ export default function LinhaDoTempo({ vendedorNome, nivelAtual }) {
         </div>
       )}
 
-      {grupos.length === 0 && todosAlertas.length === 0 && pedidosHoje.length === 0 && (
+      {/* ── Visitas realizadas hoje ──────────────────────────── */}
+      {visitasHoje.length > 0 && (
+        <div style={{ background: '#fff', borderRadius: '12px', padding: '14px 16px', marginTop: '12px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+          <p style={{ margin: '0 0 10px', fontSize: '12px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            🤝 Visitas realizadas hoje ({visitasHoje.length})
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {visitasHoje.map((v, i) => {
+              const hora = String(v.dataHoraVisita || '').slice(11, 16) || String(v.carimbo || '').slice(11, 16);
+              const nome = v.nomeEmpresa || (isNaN(v.empresa) ? v.empresa : null) || v.local || '—';
+              return (
+                <div key={v.id || i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '8px 10px', background: '#f0fdf4', borderRadius: '8px', borderLeft: '3px solid #16a34a' }}>
+                  <span style={{ fontSize: '18px', lineHeight: 1, marginTop: '1px' }}>🤝</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontWeight: '700', fontSize: '13px', color: '#15803d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{nome}</span>
+                      {hora && <span style={{ fontSize: '11px', color: '#6b7280', flexShrink: 0 }}>{hora}</span>}
+                    </div>
+                    {v.contato && <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#6b7280' }}>👤 {v.contato}</p>}
+                    {v.anotacoes && <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#374151' }}>📝 {String(v.anotacoes).trim()}</p>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {grupos.length === 0 && todosAlertas.length === 0 && pedidosHoje.length === 0 && visitasHoje.length === 0 && (
         <div style={{ textAlign: 'center', padding: '60px 16px' }}>
           <p style={{ fontSize: '32px', margin: 0 }}>✅</p>
           <p style={{ color: '#6b7280', marginTop: '8px' }}>Nenhuma atividade para hoje.</p>
