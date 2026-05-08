@@ -259,30 +259,20 @@ export default function GestaoUsuarios({ usuarioLogadoUID }) {
 
               {form.perfil === 'vendedor' && (
                 <div style={st.campo}>
-                  <label style={st.label}>Vincular ao vendedor *</label>
-                  {vendedores.length > 0 ? (
-                    <select
-                      value={form.vendedor}
-                      onChange={e => setForm(f => ({ ...f, vendedor: e.target.value }))}
-                      required
-                      style={st.input}
-                    >
-                      <option value="">Selecione...</option>
-                      {vendedores.map(v => (
-                        <option key={v} value={v}>{v}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
+                  <label style={st.label}>Nome do vendedor *</label>
+                  <input
+                      list="lista-vendedores"
                       type="text" required
                       value={form.vendedor}
                       onChange={e => setForm(f => ({ ...f, vendedor: e.target.value }))}
-                      placeholder="Nome exato (ex: Ana GO)"
+                      placeholder="Digite ou selecione..."
                       style={st.input}
-                    />
-                  )}
+                  />
+                  <datalist id="lista-vendedores">
+                    {vendedores.map(v => <option key={v} value={v} />)}
+                  </datalist>
                   <span style={{ fontSize: '10px', color: '#9ca3af' }}>
-                    Deve ser o nome exato do vendedor no sistema
+                    Vendedores existentes aparecem como sugestão. Para novo vendedor, basta digitar o nome.
                   </span>
                 </div>
               )}
