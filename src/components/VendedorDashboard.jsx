@@ -1,11 +1,22 @@
-import { useEffect, useState } from 'react';
-import { collection, query, where, getDocs, getDoc, doc } from 'firebase/firestore';
+import { useEffect, useState, useMemo, useCallback, memo, lazy, Suspense } from 'react';
+import { collection, query, where, getDocs, getDoc, doc, setDoc, serverTimestamp, documentId } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../contexts/AuthContext';
 import { hojeISO, dataParaISO } from '../utils/data';
 import MetaCard from './MetaCard';
 import GraficoVendasMensais from './GraficoVendasMensais';
-import LinhaDoTempo from './LinhaDoTempo';
+
+// Carregado sob demanda — só baixa quando o usuário abre a aba "Hoje"
+const linhaDoTempoImport = () => import('./LinhaDoTempo');
+const LinhaDoTempo = lazy(linhaDoTempoImport);
+// Prefetch silencioso: dispara o download em background assim que VendedorDashboard monta
+// Quando o usuário clicar em "Hoje" o bundle já está cacheado
+if (typeof window !== 'undefined') {
+  // requestIdleCallback para não competir com o carregamento inicial
+  const prefetch = () => linhaDoTempoImport();
+  if ('requestIdleCallback' in window) requestIdleCallback(prefetch, { timeout: 3000 });
+  else setTimeout(prefetch, 2000);
+}
 
 const MESES = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -243,9 +254,11 @@ function estaBloqueado(statusBloqueio) {
   return String(statusBloqueio || '').toLowerCase().includes('bloqueado');
 }
 
-function ClienteCard({ cliente }) {
+const ClienteCard = memo(function ClienteCard({ cliente }) {
+  const [boletosAbertos, setBoletosAbertos] = useState(false);
   const { cor, bg } = corStatus(cliente.status || 'Sem Histórico');
   const bloqueado = estaBloqueado(cliente.statusBloqueio);
+  const nomeExibido = (bloqueado && cliente.nomeFinanceiro) ? cliente.nomeFinanceiro : cliente.nome;
   return (
     <div style={{
       background: '#fff', borderRadius: '10px', padding: '14px 16px',
@@ -254,7 +267,7 @@ function ClienteCard({ cliente }) {
       display: 'flex', flexDirection: 'column', gap: '5px',
     }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: '700', fontSize: '14px', color: '#111827' }}>{cliente.nome}</span>
+        <span style={{ fontWeight: '700', fontSize: '14px', color: '#111827' }}>{nomeExibido}</span>
         {cliente.cidade && <span style={{ fontSize: '11px', color: '#9ca3af' }}>{cliente.cidade}</span>}
       </div>
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -275,14 +288,78 @@ function ClienteCard({ cliente }) {
       {cliente.orientacaoVenda && (
         <p style={{ margin: 0, fontSize: '12px', color: '#6b7280', fontStyle: 'italic' }}>{cliente.orientacaoVenda}</p>
       )}
-      {cliente.cnpj && (
-        <span style={{ fontSize: '12px', color: '#9ca3af' }}>CNPJ: {cliente.cnpj}</span>
+      {bloqueado && cliente.valorEmAtraso > 0 && (
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '12px', fontWeight: '700', color: '#dc2626' }}>
+              💸 Em atraso: {moeda(cliente.valorEmAtraso)}
+            </span>
+            {cliente.comissaoBloqueada > 0 && (
+              <span style={{ fontSize: '12px', fontWeight: '700', color: '#b45309' }}>
+                🔒 Comissão: {moeda(cliente.comissaoBloqueada)}
+              </span>
+            )}
+            {cliente.diasAtraso > 0 && (
+              <span style={{ fontSize: '11px', fontWeight: '600', color: '#fff', background: '#dc2626', borderRadius: '20px', padding: '1px 8px' }}>
+                {cliente.diasAtraso} dia{cliente.diasAtraso !== 1 ? 's' : ''}
+              </span>
+            )}
+            {cliente.boletosAtraso?.length > 0 && (
+              <button
+                onClick={() => setBoletosAbertos(a => !a)}
+                style={{ width: '20px', height: '20px', borderRadius: '50%', border: '1.5px solid #dc2626', background: '#fff', color: '#dc2626', fontWeight: '700', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, lineHeight: 1, flexShrink: 0 }}
+              >
+                {boletosAbertos ? '−' : '+'}
+              </button>
+            )}
+          </div>
+          {cliente.telefone && (() => {
+            const tel = cliente.telefone.startsWith('55') ? cliente.telefone : `55${cliente.telefone}`;
+            const destinatario = cliente.contato || nomeExibido;
+            const msg = encodeURIComponent(
+              `Opa ${destinatario}, tudo bem?\n\nVi que você tem um valor em aberto de *${moeda(cliente.valorEmAtraso)}*\n\nVocê consegue regularizar amanhã?`
+            );
+            return (
+              <a
+                href={`https://wa.me/${tel}?text=${msg}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '5px',
+                  background: '#25d366', color: '#fff', fontWeight: '700',
+                  fontSize: '12px', padding: '5px 12px', borderRadius: '20px',
+                  textDecoration: 'none', whiteSpace: 'nowrap',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                </svg>
+                Cobrar
+              </a>
+            );
+          })()}
+        </div>
+      )}
+      {bloqueado && boletosAbertos && cliente.boletosAtraso?.length > 0 && (
+        <div style={{ marginTop: '6px', borderTop: '1px solid #fecaca', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          {cliente.boletosAtraso.map((b, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', padding: '4px 8px', background: '#fff5f5', borderRadius: '6px' }}>
+              <span style={{ color: '#6b7280' }}>
+                Venc. {b.vencimento ? new Date(b.vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
+              </span>
+              <span style={{ fontWeight: '700', color: '#dc2626' }}>{moeda(b.valor)}</span>
+              <span style={{ fontWeight: '600', color: '#fff', background: '#dc2626', borderRadius: '20px', padding: '1px 7px', fontSize: '11px' }}>
+                {b.dias} dia{b.dias !== 1 ? 's' : ''}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
-}
+});
 
-function GrupoClientes({ titulo, cor, lista, defaultAberto }) {
+const GrupoClientes = memo(function GrupoClientes({ titulo, cor, lista, defaultAberto }) {
   const [aberto, setAberto] = useState(defaultAberto || false);
   if (!lista.length) return null;
   return (
@@ -311,11 +388,11 @@ function GrupoClientes({ titulo, cor, lista, defaultAberto }) {
       )}
     </div>
   );
-}
+});
 
 // ── Nível Comercial ───────────────────────────────────────────────────────────
 
-function CriterioRow({ label, atual, minimo, maximo, formatar, invertido }) {
+const CriterioRow = memo(function CriterioRow({ label, atual, minimo, maximo, formatar, invertido }) {
   const passou = maximo != null ? atual <= maximo : atual >= minimo;
   const refVal = maximo != null ? maximo : minimo;
   return (
@@ -334,11 +411,11 @@ function CriterioRow({ label, atual, minimo, maximo, formatar, invertido }) {
       </div>
     </div>
   );
-}
+});
 
 // ── Pódio por critério ───────────────────────────────────────────────────────
 
-function RankingNiveis({ metricasVendedores, vendedorAtual }) {
+const RankingNiveis = memo(function RankingNiveis({ metricasVendedores, vendedorAtual }) {
   const nomeNorm = vendedorAtual ? normalizarVendedor(vendedorAtual) : '';
 
   // Exclui vendedores com menos de R$20.000 de faturamento no período
@@ -515,11 +592,506 @@ function RankingNiveis({ metricasVendedores, vendedorAtual }) {
       </div>
     </div>
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Diagnóstico do Cliente ────────────────────────────────────────────────────
+
+// Redimensiona imagens para max 1200px e qualidade 0.7 antes de enviar
+// PDFs passam sem alteração
+function comprimirArquivo(file) {
+  return new Promise((resolve, reject) => {
+    if (file.type === 'application/pdf') {
+      const reader = new FileReader();
+      reader.onload = e => resolve({ base64: e.target.result.split(',')[1], mimeType: file.type, nome: file.name });
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 1200;
+        let { width, height } = img;
+        if (width > MAX || height > MAX) {
+          if (width > height) { height = Math.round(height * MAX / width); width = MAX; }
+          else { width = Math.round(width * MAX / height); height = MAX; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+        resolve({ base64: dataUrl.split(',')[1], mimeType: 'image/jpeg', nome: file.name });
+      };
+      img.onerror = reject;
+      img.src = ev.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function statusDiagBadge(status) {
+  if (status === 'ATIVO')       return { bg: '#dcfce7', cor: '#15803d', texto: '✓ Ativo' };
+  if (status === 'RECUPERACAO') return { bg: '#fef3c7', cor: '#92400e', texto: '⟳ Recuperar' };
+  return                               { bg: '#dbeafe', cor: '#1e40af', texto: '+ Novo' };
+}
+
+function DiagnosticoTab({
+  todosClientes, carregandoClientes, vendedorNome,
+  diagCliente, setDiagCliente,
+  diagModo, setDiagModo,
+  diagArquivos, setDiagArquivos,
+  diagPreviews, setDiagPreviews,
+  diagUrl, setDiagUrl,
+  diagAnalisando, setDiagAnalisando,
+  diagResultado, setDiagResultado,
+  diagErro, setDiagErro,
+}) {
+  const clienteInfo = todosClientes.find(c => c.cnpj === diagCliente);
+
+  function onArquivo(e) {
+    const novos = Array.from(e.target.files);
+    if (!novos.length) return;
+    setDiagArquivos(prev => [...prev, ...novos]);
+    setDiagResultado(null);
+    setDiagErro(null);
+    novos.forEach(file => {
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = ev => setDiagPreviews(prev => [...prev, { name: file.name, url: ev.target.result }]);
+        reader.readAsDataURL(file);
+      } else {
+        setDiagPreviews(prev => [...prev, { name: file.name, url: null }]);
+      }
+    });
+    e.target.value = ''; // permite re-selecionar os mesmos arquivos
+  }
+
+  function removerArquivo(idx) {
+    setDiagArquivos(prev => prev.filter((_, i) => i !== idx));
+    setDiagPreviews(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function trocarModo(modo) {
+    setDiagModo(modo);
+    setDiagArquivos([]);
+    setDiagPreviews([]);
+    setDiagUrl('');
+    setDiagResultado(null);
+    setDiagErro(null);
+  }
+
+  const podeContinuar = diagCliente && !diagAnalisando &&
+    (diagModo === 'arquivo' ? diagArquivos.length > 0 : diagUrl.trim().startsWith('http'));
+
+  async function analisar() {
+    if (!podeContinuar) return;
+    setDiagAnalisando(true);
+    setDiagErro(null);
+    setDiagResultado(null);
+
+    try {
+      // Monta histórico de compras do cliente + catálogo P3 em paralelo
+      const { collection, query, where, getDocs } = await import('firebase/firestore');
+      const { db: fireDb } = await import('../firebase/config');
+      const { dataParaISO: dISO } = await import('../utils/data');
+
+      const hoje = new Date();
+      const d90  = new Date(hoje); d90.setDate(d90.getDate() - 90);
+      const ini90 = dISO(d90);
+
+      // Busca pedidos do vendedor responsável e filtra por CNPJ normalizado
+      // (garante match mesmo que pedidos.cnpj tenha formatação diferente)
+      const [snapTodosPed, snapCat] = await Promise.all([
+        getDocs(query(collection(fireDb, 'pedidos'), where('vendedorResponsavel', '==', vendedorNome))),
+        getDocs(collection(fireDb, 'produtos')),
+      ]);
+
+      // Catálogo P3 real
+      const catalogo = snapCat.docs.map(d => ({
+        nomeProduto: d.data().nomeProduto || '',
+        categoria:   d.data().categoria   || '',
+      })).filter(p => p.nomeProduto);
+
+      // Histórico do cliente agrupado por produto — filtra por CNPJ normalizado
+      const prodMap = {};
+      snapTodosPed.docs.forEach(d => {
+        const p = d.data();
+        if (normalizarCnpj(p.cnpj) !== diagCliente) return;
+        const key = (p.item || p.produto || p.categoriaProduto || '').trim().toLowerCase();
+        if (!key) return;
+        if (!prodMap[key]) prodMap[key] = {
+          produto: p.item || p.produto || p.categoriaProduto || key,
+          categoria: p.categoriaProduto || '',
+          totalFat: 0,
+          ultimaCompra: '',
+        };
+        prodMap[key].totalFat += Number(p.faturamento || 0);
+        if ((p.dataVenda || '') > prodMap[key].ultimaCompra) prodMap[key].ultimaCompra = p.dataVenda || '';
+      });
+
+      const historico = Object.values(prodMap).map(h => ({
+        ...h,
+        status: h.ultimaCompra >= ini90 ? 'ATIVO' : 'INATIVO',
+      }));
+
+      let body;
+      if (diagModo === 'link') {
+        body = { url: diagUrl.trim(), nomeCliente: clienteInfo?.nome || diagCliente, historico, catalogo };
+      } else {
+        const arquivosEncodados = await Promise.all(diagArquivos.map(file => comprimirArquivo(file)));
+        body = { arquivos: arquivosEncodados, nomeCliente: clienteInfo?.nome || diagCliente, historico, catalogo };
+      }
+
+      const res = await fetch('/api/diagnostico', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Erro ${res.status}`);
+      }
+
+      const raw = await res.json();
+
+      // Agrupa oportunidades pelo mesmo produto — evita repetição
+      const agrupado = {};
+      (raw.oportunidades || []).forEach(o => {
+        const key = (o.ingrediente || '').toLowerCase();
+        if (!agrupado[key]) {
+          agrupado[key] = { ...o, itensCardapio: o.itemCardapio ? [o.itemCardapio] : [] };
+        } else {
+          if (o.itemCardapio && !agrupado[key].itensCardapio.includes(o.itemCardapio)) {
+            agrupado[key].itensCardapio.push(o.itemCardapio);
+          }
+          // Mantém o status mais relevante: RECUPERACAO > ATIVO > NOVO
+          const prioridade = { RECUPERACAO: 3, ATIVO: 2, NOVO: 1 };
+          if ((prioridade[o.status] || 0) > (prioridade[agrupado[key].status] || 0)) {
+            agrupado[key].status = o.status;
+          }
+        }
+      });
+
+      const resultado = { ...raw, oportunidades: Object.values(agrupado) };
+      setDiagResultado(resultado);
+
+      // Salva diagnóstico no Firestore para análise futura
+      try {
+        const { addDoc, collection: col } = await import('firebase/firestore');
+        await addDoc(col(fireDb, 'diagnosticos'), {
+          vendedor: vendedorNome,
+          clienteNome: clienteInfo?.nome || diagCliente,
+          cnpj: diagCliente,
+          data: new Date().toISOString(),
+          oportunidades: resultado.oportunidades,
+          naoVendemos: resultado.naoVendemos || [],
+          itensCardapio: resultado.itensCardapio || [],
+          resumo: resultado.resumo || '',
+        });
+      } catch {}
+    } catch (err) {
+      setDiagErro(err.message || 'Erro inesperado. Tente novamente.');
+    } finally {
+      setDiagAnalisando(false);
+    }
+  }
+
+  const grupos = diagResultado ? {
+    ATIVO:       diagResultado.oportunidades.filter(o => o.status === 'ATIVO'),
+    RECUPERACAO: diagResultado.oportunidades.filter(o => o.status === 'RECUPERACAO'),
+    NOVO:        diagResultado.oportunidades.filter(o => o.status === 'NOVO'),
+  } : null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+      {/* Cabeçalho */}
+      <div style={{ background: '#fff', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+        <h2 style={{ margin: '0 0 6px', fontSize: '16px', fontWeight: '800', color: '#111827' }}>🔍 Diagnóstico do Cliente</h2>
+        <p style={{ margin: 0, fontSize: '13px', color: '#6b7280', lineHeight: '1.5' }}>
+          Selecione um cliente, informe o cardápio e nossa IA vai mapear todos os produtos que ele usa e identificar oportunidades de venda da P3.
+        </p>
+      </div>
+
+      {/* Passo 1 — Selecionar cliente */}
+      <div style={{ background: '#fff', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+        <p style={{ margin: '0 0 10px', fontSize: '12px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          1. Selecionar cliente
+        </p>
+        {carregandoClientes ? (
+          <p style={{ margin: 0, fontSize: '13px', color: '#9ca3af' }}>Carregando clientes...</p>
+        ) : (
+          <select
+            value={diagCliente}
+            onChange={e => { setDiagCliente(e.target.value); setDiagResultado(null); setDiagErro(null); }}
+            style={{ width: '100%', padding: '10px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', fontFamily: 'inherit', outline: 'none', background: '#fff' }}
+          >
+            <option value="">— Selecione um cliente —</option>
+            {[...todosClientes].sort((a,b) => a.nome.localeCompare(b.nome)).map(c => (
+              <option key={c.cnpj} value={c.cnpj}>{c.nome}{c.cidade ? ` — ${c.cidade}` : ''}</option>
+            ))}
+          </select>
+        )}
+        {clienteInfo && (
+          <div style={{ marginTop: '10px', padding: '10px 12px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #86efac', fontSize: '12px', color: '#15803d', fontWeight: '600' }}>
+            ✓ {clienteInfo.nome} selecionado{clienteInfo.cidade ? ` · ${clienteInfo.cidade}` : ''}
+          </div>
+        )}
+      </div>
+
+      {/* Passo 2 — Cardápio */}
+      <div style={{ background: '#fff', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+        <p style={{ margin: '0 0 12px', fontSize: '12px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          2. Cardápio do cliente
+        </p>
+
+        {/* Toggle arquivo / link */}
+        <div style={{ display: 'flex', gap: '0', marginBottom: '16px', border: '1.5px solid #e5e7eb', borderRadius: '8px', overflow: 'hidden' }}>
+          {[{ id: 'arquivo', label: '📎 Arquivo' }, { id: 'link', label: '🔗 Link da página' }].map(m => (
+            <button
+              key={m.id}
+              onClick={() => trocarModo(m.id)}
+              style={{
+                flex: 1, padding: '9px', border: 'none', fontFamily: 'inherit',
+                fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+                background: diagModo === m.id ? '#0f3460' : '#fff',
+                color: diagModo === m.id ? '#fff' : '#6b7280',
+                transition: 'background 0.15s',
+              }}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {diagModo === 'arquivo' ? (
+          <>
+            {/* Lista de arquivos já adicionados */}
+            {diagArquivos.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                {diagPreviews.map((p, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #86efac' }}>
+                    {p.url ? (
+                      <img src={p.url} alt="" style={{ width: '44px', height: '44px', objectFit: 'cover', borderRadius: '6px', flexShrink: 0 }} />
+                    ) : (
+                      <span style={{ fontSize: '28px', flexShrink: 0 }}>📄</span>
+                    )}
+                    <span style={{ fontSize: '12px', fontWeight: '600', color: '#15803d', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+                    <button onClick={() => removerArquivo(i)} style={{ flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#9ca3af', padding: '2px 4px', lineHeight: 1 }} title="Remover">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Botão para adicionar mais arquivos */}
+            <label style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+              gap: '8px', padding: diagArquivos.length > 0 ? '14px' : '24px',
+              border: '2px dashed #cbd5e1', borderRadius: '10px',
+              cursor: 'pointer', background: '#fafafa',
+            }}>
+              <input type="file" accept="image/*,application/pdf" onChange={onArquivo} multiple style={{ display: 'none' }} />
+              <span style={{ fontSize: diagArquivos.length > 0 ? '20px' : '32px' }}>📂</span>
+              <span style={{ fontSize: '13px', fontWeight: '600', color: '#374151' }}>
+                {diagArquivos.length > 0 ? '+ Adicionar mais páginas' : 'Clique para anexar o cardápio'}
+              </span>
+              {diagArquivos.length === 0 && <span style={{ fontSize: '12px', color: '#9ca3af' }}>Fotos (JPG, PNG) ou PDF — pode selecionar vários</span>}
+            </label>
+          </>
+        ) : (
+          <>
+            <input
+              type="url"
+              value={diagUrl}
+              onChange={e => { setDiagUrl(e.target.value); setDiagResultado(null); setDiagErro(null); }}
+              placeholder="https://www.restaurante.com.br/cardapio"
+              style={{ width: '100%', padding: '11px 14px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }}
+            />
+            <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#9ca3af', lineHeight: '1.5' }}>
+              Cole o link do cardápio online, de um PDF público ou da página do restaurante. O link precisa ser público (sem login).
+            </p>
+            {diagUrl && !diagUrl.trim().startsWith('http') && (
+              <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#dc2626' }}>O link deve começar com http:// ou https://</p>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Botão analisar */}
+      <button
+        onClick={analisar}
+        disabled={!podeContinuar}
+        style={{
+          padding: '14px', background: diagAnalisando ? '#6b7280' : '#0f3460', color: '#fff',
+          border: 'none', borderRadius: '10px', fontSize: '15px', fontWeight: '700',
+          cursor: podeContinuar ? 'pointer' : 'not-allowed',
+          fontFamily: 'inherit', opacity: podeContinuar ? 1 : 0.5,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+        }}
+      >
+        {diagAnalisando ? (
+          <>
+            <span style={{ display: 'inline-block', width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+            Analisando cardápio com IA...
+          </>
+        ) : '🔍 Analisar Cardápio'}
+      </button>
+
+      {/* Erro */}
+      {diagErro && (
+        <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: '10px', padding: '14px 16px', fontSize: '13px', color: '#991b1b' }}>
+          ❌ {diagErro}
+        </div>
+      )}
+
+      {/* Resultado */}
+      {diagResultado && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+
+          {/* Resumo */}
+          <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '12px', padding: '16px 18px' }}>
+            <p style={{ margin: '0 0 6px', fontSize: '12px', fontWeight: '700', color: '#1e40af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Resumo da Análise</p>
+            <p style={{ margin: 0, fontSize: '14px', color: '#1e3a8a', lineHeight: '1.6' }}>{diagResultado.resumo}</p>
+          </div>
+
+          {/* Contadores */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+            {[
+              { label: 'Ativos', count: grupos.ATIVO.length, bg: '#dcfce7', cor: '#15803d' },
+              { label: 'Recuperar', count: grupos.RECUPERACAO.length, bg: '#fef3c7', cor: '#92400e' },
+              { label: 'Novos', count: grupos.NOVO.length, bg: '#dbeafe', cor: '#1e40af' },
+            ].map(item => (
+              <div key={item.label} style={{ background: item.bg, borderRadius: '10px', padding: '14px', textAlign: 'center' }}>
+                <p style={{ margin: 0, fontSize: '28px', fontWeight: '800', color: item.cor }}>{item.count}</p>
+                <p style={{ margin: 0, fontSize: '12px', fontWeight: '700', color: item.cor }}>{item.label}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Oportunidades de recuperação */}
+          {grupos.RECUPERACAO.length > 0 && (
+            <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+              <p style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: '800', color: '#92400e' }}>⟳ Recuperar ({grupos.RECUPERACAO.length})</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {grupos.RECUPERACAO.map((o, i) => <OportunidadeCard key={i} o={o} />)}
+              </div>
+            </div>
+          )}
+
+          {/* Oportunidades novas */}
+          {grupos.NOVO.length > 0 && (
+            <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+              <p style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: '800', color: '#1e40af' }}>+ Novos produtos ({grupos.NOVO.length})</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {grupos.NOVO.map((o, i) => <OportunidadeCard key={i} o={o} />)}
+              </div>
+            </div>
+          )}
+
+          {/* Ativos */}
+          {grupos.ATIVO.length > 0 && (
+            <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+              <p style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: '800', color: '#15803d' }}>✓ Já compra ({grupos.ATIVO.length})</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {grupos.ATIVO.map((o, i) => <OportunidadeCard key={i} o={o} />)}
+              </div>
+            </div>
+          )}
+
+          {/* Itens encontrados no cardápio */}
+          {diagResultado.itensCardapio?.length > 0 && (
+            <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+              <p style={{ margin: '0 0 10px', fontSize: '12px', fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Itens identificados no cardápio ({diagResultado.itensCardapio.length})
+              </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {diagResultado.itensCardapio.map((item, i) => (
+                  <span key={i} style={{ fontSize: '12px', padding: '3px 10px', background: '#f3f4f6', borderRadius: '20px', color: '#374151' }}>{item}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Não vendemos */}
+          {diagResultado.naoVendemos?.length > 0 && (
+            <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', opacity: 0.75 }}>
+              <p style={{ margin: '0 0 4px', fontSize: '12px', fontWeight: '700', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Não vendemos ({diagResultado.naoVendemos.length})
+              </p>
+              <p style={{ margin: '0 0 8px', fontSize: '11px', color: '#d1d5db' }}>Ingredientes do cardápio que não estão no catálogo P3</p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {diagResultado.naoVendemos.map((item, i) => (
+                  <span key={i} style={{ fontSize: '12px', padding: '3px 10px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '20px', color: '#9ca3af' }}>{item}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Botão nova análise */}
+          <button
+            onClick={() => { setDiagResultado(null); setDiagArquivo(null); setDiagPreview(null); }}
+            style={{ padding: '10px', background: '#fff', color: '#374151', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            ← Nova Análise
+          </button>
+        </div>
+      )}
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+function OportunidadeCard({ o }) {
+  const badge = statusDiagBadge(o.status);
+  const itens = o.itensCardapio?.length ? o.itensCardapio : (o.itemCardapio ? [o.itemCardapio] : []);
+  return (
+    <div style={{ borderRadius: '8px', border: '1px solid #e5e7eb', padding: '12px 14px', background: '#fafafa' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px', marginBottom: '6px' }}>
+        <span style={{ fontSize: '13px', fontWeight: '700', color: '#111827' }}>{o.ingrediente}</span>
+        <span style={{ fontSize: '11px', fontWeight: '700', padding: '2px 8px', borderRadius: '20px', background: badge.bg, color: badge.cor, whiteSpace: 'nowrap', flexShrink: 0 }}>
+          {badge.texto}
+        </span>
+      </div>
+      {o.categoria && (
+        <span style={{ display: 'inline-block', fontSize: '10px', color: '#6b7280', background: '#f3f4f6', padding: '2px 7px', borderRadius: '10px', marginBottom: '6px' }}>
+          {o.categoria}
+        </span>
+      )}
+      {itens.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+          <span style={{ fontSize: '11px', color: '#9ca3af' }}>Usado em:</span>
+          {itens.map((item, i) => (
+            <span key={i} style={{ fontSize: '11px', padding: '1px 7px', background: '#eff6ff', color: '#1d4ed8', borderRadius: '10px', fontWeight: '600' }}>
+              {item}
+            </span>
+          ))}
+        </div>
+      )}
+      {o.motivo && (
+        <p style={{ margin: 0, fontSize: '12px', color: '#6b7280', lineHeight: '1.45' }}>{o.motivo}</p>
+      )}
+      {o.produtosHistorico?.length > 0 && (
+        <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#9ca3af' }}>Comprou antes: {o.produtosHistorico.join(', ')}</p>
+      )}
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial, onVoltar }) {
+// Array de anos disponíveis — calculado uma vez (válido por toda a sessão)
+const ANOS_DISPONIVEIS = (() => {
+  const a = new Date().getFullYear();
+  return [a, a - 1, a - 2, a - 3];
+})();
+
+export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial, onVoltar, abaInicial }) {
   const { perfil, logout } = useAuth();
   const nome        = vendedorNome || perfil?.vendedor; // nome completo — usado nas queries
   const nomeDisplay = normalizarVendedor(nome);          // sem estado — usado na exibição
@@ -533,7 +1105,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
   const [carregando, setCarregando]     = useState(false);
   const [filtroAtrasado, setFiltroAtrasado] = useState(false);
   const [expandidos, setExpandidos]     = useState(new Set());
-  const [aba, setAba]                   = useState('hoje');
+  const [aba, setAba]                   = useState(abaInicial || 'hoje');
   const [totalPago, setTotalPago]       = useState(0);
   const [todosClientes, setTodosClientes]           = useState([]);
   const [carregandoClientes, setCarregandoClientes] = useState(false);
@@ -544,9 +1116,26 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
   const [lideres, setLideres]                       = useState(null); // líderes por produto
   const [progressaoNivel, setProgressaoNivel]       = useState(null); // { diasPorNivel, nivelMaioria, totalDias }
   const [nivelExpanded, setNivelExpanded]           = useState(false);
+  const [historicoComissao, setHistoricoComissao]   = useState({ emAberto: 0, saldo: 0, atrasado: 0, carregando: false });
+  const [trendCategorias, setTrendCategorias]       = useState(null); // null=loading, []|array=pronto
+  const [trendProdutos, setTrendProdutos]           = useState(null);
+  const [historicoMensal, setHistoricoMensal]       = useState(null); // tabela 12 meses
 
-  const anos = [];
-  for (let a = hoje.getFullYear(); a >= hoje.getFullYear() - 3; a--) anos.push(a);
+  // Aniversários dos compradores
+  const [modalAniversario,    setModalAniversario]    = useState(null);  // { cnpj, nome }
+  const [dataAniversario,     setDataAniversario]     = useState('');
+  const [aniversariosSalvos,  setAniversariosSalvos]  = useState({});    // { cnpj: 'MM-DD' }
+  const [salvandoAniversario, setSalvandoAniversario] = useState(false);
+
+  // Diagnóstico do cliente
+  const [diagCliente,    setDiagCliente]    = useState('');        // cnpj selecionado
+  const [diagModo,       setDiagModo]       = useState('arquivo'); // 'arquivo' | 'link'
+  const [diagArquivos,   setDiagArquivos]   = useState([]);        // File[] (múltiplos)
+  const [diagPreviews,   setDiagPreviews]   = useState([]);        // data URL[]
+  const [diagUrl,        setDiagUrl]        = useState('');        // URL do cardápio
+  const [diagAnalisando, setDiagAnalisando] = useState(false);
+  const [diagResultado,  setDiagResultado]  = useState(null);
+  const [diagErro,       setDiagErro]       = useState(null);
 
   // REGRA: análises de carteira usam pedidos.vendedorResponsavel (responsável atual)
   // Comissões continuam usando pedidos.vendedor (histórico da venda)
@@ -594,6 +1183,15 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
         const novos30d = Object.values(cnpjMap).filter((c) => c.firstDt >= limite30dStr).length;
         setNovosClientes30d(novos30d);
 
+        // Comissão gerada por CNPJ nos últimos 30 dias
+        const comissao30dPorCnpj = {};
+        snapPed.docs.forEach(d => {
+          const p = d.data();
+          const cnpj = normalizarCnpj(p.cnpj);
+          if (!cnpj || (p.dataVenda || '') < limite30dStr) return;
+          comissao30dPorCnpj[cnpj] = (comissao30dPorCnpj[cnpj] || 0) + Number(p.comissao || 0);
+        });
+
         const cnpjs = Object.keys(cnpjMap);
 
         if (!cnpjs.length) {
@@ -602,21 +1200,72 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
           return;
         }
 
-        // 2. Lookup em clientes por CNPJ (lotes de 30)
+        // 2. Lookup em clientes por CNPJ (lotes de 30, paralelo)
         const cliMap = {};
-        for (let i = 0; i < cnpjs.length; i += 30) {
-          const lote = cnpjs.slice(i, i + 30);
-          const snap = await getDocs(
-            query(collection(db, 'clientes'), where('cnpj', 'in', lote))
+        const cliLotes = [];
+        for (let i = 0; i < cnpjs.length; i += 30) cliLotes.push(cnpjs.slice(i, i + 30));
+        const cliSnaps = await Promise.all(
+          cliLotes.map((lote) => getDocs(query(collection(db, 'clientes'), where('cnpj', 'in', lote))))
+        );
+        cliSnaps.forEach((snap) => snap.docs.forEach((d) => { const r = d.data(); cliMap[r.cnpj] = r; }));
+
+        // 3. Busca dados financeiros APENAS para clientes bloqueados (otimização)
+        const cnpjsBloqueados = new Set(
+          cnpjs.filter(cnpj => estaBloqueado((cliMap[cnpj] || {}).statusBloqueio))
+        );
+        // atrasoPorCnpj[cnpj] = { valor, diasMax, nomeFinanceiro }
+        const atrasoPorCnpj = {};
+        if (cnpjsBloqueados.size > 0) {
+          const pedsBloq = snapPed.docs
+            .map(d => d.data())
+            .filter(p => cnpjsBloqueados.has(normalizarCnpj(p.cnpj)));
+          const finIdsBloq = [...new Set(pedsBloq.map(finId).filter(Boolean))];
+          const finMapCli = {};
+          const finBloqLotes = [];
+          for (let i = 0; i < finIdsBloq.length; i += 30) finBloqLotes.push(finIdsBloq.slice(i, i + 30));
+          const finBloqSnaps = await Promise.all(
+            finBloqLotes.map((lote) => getDocs(query(collection(db, 'financeiro'), where('docId', 'in', lote))))
           );
-          snap.docs.forEach((d) => { const r = d.data(); cliMap[r.cnpj] = r; });
+          finBloqSnaps.forEach((snap) => snap.docs.forEach(d => {
+            const r = d.data();
+            if (r.statusGeral !== 'ATRASADO') return;
+            const boletosAtrasados = (r.boletos || []).filter(b => b.status === 'ATRASADO');
+            finMapCli[r.docId] = {
+              cliente:            r.cliente || '',
+              valorEmAberto:      boletosAtrasados.reduce((s, b) => s + Number(b.valorEmAberto || 0), 0),
+              diasAtraso:         Math.max(0, ...boletosAtrasados.map(b => Number(b.diasAtraso || 0))),
+              comissaoBloqueada:  Number(r.comissaoBloqueada || 0),
+              boletos:            boletosAtrasados.map(b => ({
+                vencimento:    b.dataVencimento || '',
+                valor:         Number(b.valorEmAberto || 0),
+                dias:          Number(b.diasAtraso    || 0),
+              })).sort((a, b) => a.dias - b.dias),
+            };
+          }));
+          const fidVistos = {};
+          pedsBloq.forEach(p => {
+            const cnpj = normalizarCnpj(p.cnpj);
+            if (!cnpj) return;
+            const fid = finId(p);
+            const fin = finMapCli[fid];
+            if (!fin) return;
+            if (!fidVistos[cnpj]) fidVistos[cnpj] = new Set();
+            if (fidVistos[cnpj].has(fid)) return;
+            fidVistos[cnpj].add(fid);
+            if (!atrasoPorCnpj[cnpj]) atrasoPorCnpj[cnpj] = { valor: 0, diasMax: 0, nomeFinanceiro: '', comissao: 0, boletos: [] };
+            atrasoPorCnpj[cnpj].valor   += fin.valorEmAberto;
+            atrasoPorCnpj[cnpj].comissao += fin.comissaoBloqueada;
+            if (fin.diasAtraso > atrasoPorCnpj[cnpj].diasMax) atrasoPorCnpj[cnpj].diasMax = fin.diasAtraso;
+            if (fin.cliente && !atrasoPorCnpj[cnpj].nomeFinanceiro) atrasoPorCnpj[cnpj].nomeFinanceiro = fin.cliente;
+            atrasoPorCnpj[cnpj].boletos.push(...fin.boletos);
+          });
         }
 
-        // 3. Monta lista
+        // 4. Monta lista
         const lista = cnpjs.map((cnpj) => {
           const r = cliMap[cnpj] || {};
           return {
-            nome:            String(r.nomeEmpresa || r.cliente || cnpjMap[cnpj].nomeCliente || '—').trim(),
+            nome:            String(r.cliente || cnpjMap[cnpj].nomeCliente || '—').trim(),
             cnpj,
             cidade:          String(r.cidade          || '').trim(),
             status:          String(r.status          || '').trim() || 'Sem Histórico',
@@ -625,6 +1274,14 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
             score:           r.score             != null ? Number(r.score)             : null,
             fatMedioMensal:  r.fatMedioMensal90d != null ? Number(r.fatMedioMensal90d) : 0,
             pontuacao:       cnpjMap[cnpj]?.pontuacao || 0,
+            valorEmAtraso:   atrasoPorCnpj[cnpj]?.valor          || 0,
+            diasAtraso:      atrasoPorCnpj[cnpj]?.diasMax        || 0,
+            nomeFinanceiro:  atrasoPorCnpj[cnpj]?.nomeFinanceiro || '',
+            comissaoBloqueada: atrasoPorCnpj[cnpj]?.comissao                               || 0,
+            comissao30d:       comissao30dPorCnpj[cnpj]                                    || 0,
+            boletosAtraso:     atrasoPorCnpj[cnpj]?.boletos?.sort((a, b) => a.dias - b.dias) || [],
+            telefone:        String(r.telefone || '').replace(/\D/g, ''),
+            contato:         String(r.contato  || '').trim(),
           };
         }).sort((a, b) => a.nome.localeCompare(b.nome));
 
@@ -649,6 +1306,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
         if (snap.exists()) {
           const d = snap.data();
           setMetricasNivel({
+            nivel:          d.nivel ?? null,
             totalFat:       d.totalFat,
             totalCom:       d.totalCom,
             clientesAtivos: d.clientesAtivos,
@@ -663,6 +1321,213 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
     }
     buscarNivelHoje();
   }, [nome]);
+
+  // Tendência de representatividade por categoria: média 3 meses vs últimos 30 dias
+  useEffect(() => {
+    if (!nome) return;
+    async function buscarTrend() {
+      try {
+        const hoje  = new Date();
+        const d30   = new Date(hoje); d30.setDate(d30.getDate() - 30);
+        const d120  = new Date(hoje); d120.setDate(d120.getDate() - 120);
+        const ini30  = dataParaISO(d30);
+        const ini120 = dataParaISO(d120);
+        const hojeStr = hojeISO();
+
+        const snap = await getDocs(query(
+          collection(db, 'pedidos'),
+          where('vendedor',  '==', nome),
+          where('dataVenda', '>=', ini120),
+          where('dataVenda', '<=', hojeStr),
+        ));
+
+        const fat30cat = {}, fat3mcat = {};
+        const fat30prod = {}, fat3mprod = {};
+        let total30 = 0, total3m = 0;
+
+        snap.docs.forEach(d => {
+          const p    = d.data();
+          const cat  = String(p.categoriaProduto || '').trim();
+          const prod = String(p.produto || '').trim();
+          const fat  = Number(p.faturamento || 0);
+          const dt   = String(p.dataVenda || '').slice(0, 10);
+          if (!fat) return;
+          if (dt >= ini30) {
+            if (cat)  { fat30cat[cat]   = (fat30cat[cat]   || 0) + fat; }
+            if (prod) { fat30prod[prod] = (fat30prod[prod] || 0) + fat; }
+            total30 += fat;
+          } else {
+            if (cat)  { fat3mcat[cat]   = (fat3mcat[cat]   || 0) + fat; }
+            if (prod) { fat3mprod[prod] = (fat3mprod[prod] || 0) + fat; }
+            total3m += fat;
+          }
+        });
+
+        function calcTrend(fat30map, fat3mmap, t30, t3m, minMedia) {
+          const keys = new Set([...Object.keys(fat30map), ...Object.keys(fat3mmap)]);
+          const out = [];
+          keys.forEach(k => {
+            const f3m   = fat3mmap[k] || 0;
+            const f30   = fat30map[k] || 0;
+            const media = f3m / 3;
+            if (media < minMedia) return;
+            const rep3m = t3m > 0 ? (f3m / t3m) * 100 : 0;
+            const rep30 = t30 > 0 ? (f30 / t30) * 100 : 0;
+            out.push({ key: k, f30, f3m, media, rep30, rep3m, delta: rep30 - rep3m });
+          });
+          out.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+          return out;
+        }
+
+        setTrendCategorias(calcTrend(fat30cat,  fat3mcat,  total30, total3m, 3000));
+        setTrendProdutos(  calcTrend(fat30prod, fat3mprod, total30, total3m, 3000));
+      } catch (err) {
+        console.error('Erro ao calcular trend categorias:', err);
+        setTrendCategorias([]);
+        setTrendProdutos([]);
+      }
+    }
+    buscarTrend();
+  }, [nome]);
+
+  // Tabela histórico 12 meses (performance individual)
+  useEffect(() => {
+    setHistoricoMensal(null); // reset ao trocar de vendedor
+  }, [nome]);
+
+  useEffect(() => {
+    if (aba !== 'produtos' || !nome || historicoMensal !== null) return;
+    const MESES_ABR = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    async function carregarHistorico() {
+      try {
+        const hoje  = new Date();
+        const meses = [];
+        for (let i = 11; i >= 0; i--) {
+          const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+          meses.push({
+            key:          `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+            label:        `${MESES_ABR[d.getMonth()]}/${String(d.getFullYear()).slice(2)}`,
+            faturamento:  0,
+            clientesNovos: 0,
+            visitas:      0,
+          });
+        }
+        const inicio    = new Date(hoje.getFullYear(), hoje.getMonth() - 11, 1);
+        const inicioStr = dataParaISO(inicio);
+
+        // Todos os pedidos do vendedor — sem filtro de data para achar primeira compra real
+        const snapPed = await getDocs(query(
+          collection(db, 'pedidos'),
+          where('vendedorResponsavel', '==', nome),
+        ));
+
+        // Faturamento (últimos 12 meses) + primeira compra real por CNPJ (todos os tempos)
+        const primeiroPedido = {};
+        snapPed.docs.forEach(d => {
+          const p  = d.data();
+          const dv = String(p.dataVenda || '');
+          if (dv.length < 7) return;
+
+          // Faturamento só para os últimos 12 meses
+          if (dv >= inicioStr) {
+            const mesKey = dv.slice(0, 7);
+            const idx    = meses.findIndex(m => m.key === mesKey);
+            if (idx >= 0) meses[idx].faturamento += Number(p.faturamento || 0);
+          }
+
+          // Rastreia primeira compra de cada CNPJ (sem limite de data)
+          const cnpj = String(p.cnpj || '').replace(/\D/g, '');
+          if (cnpj && (!primeiroPedido[cnpj] || dv < primeiroPedido[cnpj]))
+            primeiroPedido[cnpj] = dv;
+        });
+
+        // Clientes novos: primeira compra dentro dos últimos 12 meses
+        Object.values(primeiroPedido).forEach(firstDate => {
+          if (firstDate < inicioStr) return; // cliente já existia antes da janela
+          const idx = meses.findIndex(m => m.key === firstDate.slice(0, 7));
+          if (idx >= 0) meses[idx].clientesNovos++;
+        });
+
+        // Visitas de relatorioVisitas
+        // Doc ID: slug_cnpj_YYYYMMDD_HHmmss  |  dataHoraVisita: "2026-04-30T17:00:00"
+        try {
+          // Slug: lowercase + underscores do nome sem sufixo de estado
+          const slugBase = nome.toLowerCase().replace(/\s+/g, '_');
+          const slugSem  = nome.replace(/\s+[A-Z]{2}$/, '').trim()
+                               .toLowerCase().replace(/\s+/g, '_');
+
+          // Tenta com slugSem primeiro, depois slugBase (cobre nomes com e sem estado)
+          let snapVis = await getDocs(query(
+            collection(db, 'relatorioVisitas'),
+            where(documentId(), '>=', slugSem + '_'),
+            where(documentId(), '<',  slugSem + '_'),
+          ));
+          // Se não achou nada e slugBase é diferente, tenta com slugBase
+          if (snapVis.empty && slugBase !== slugSem) {
+            snapVis = await getDocs(query(
+              collection(db, 'relatorioVisitas'),
+              where(documentId(), '>=', slugBase + '_'),
+              where(documentId(), '<',  slugBase + '_'),
+            ));
+          }
+
+          snapVis.docs.forEach(d => {
+            const r = d.data();
+            // dataHoraVisita: string ISO "2026-04-30T17:00:00" → slice(0,7) = "2026-04"
+            const dhv = r.dataHoraVisita || r.carimbo || r.data || r.dataVisita || '';
+            let mesKey = '';
+            if (dhv && typeof dhv.toDate === 'function') {
+              const dt = dhv.toDate();
+              mesKey = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
+            } else {
+              const s = String(dhv);
+              if (s[4] === '-') mesKey = s.slice(0, 7);           // ISO: YYYY-MM-...
+              else if (s[2] === '/') mesKey = `${s.slice(6,10)}-${s.slice(3,5)}`; // BR: DD/MM/YYYY
+            }
+            if (!mesKey || mesKey.length < 7) return;
+            const idx = meses.findIndex(x => x.key === mesKey);
+            if (idx >= 0) meses[idx].visitas++;
+          });
+        } catch (e) { console.error('[visitas] erro:', e); }
+
+        setHistoricoMensal(meses);
+      } catch (err) {
+        console.error('Erro histórico mensal:', err);
+        setHistoricoMensal([]);
+      }
+    }
+    carregarHistorico();
+  }, [aba, nome, historicoMensal]);
+
+  // Aniversários salvos para a carteira deste vendedor
+  useEffect(() => {
+    if (!nome) return;
+    getDocs(query(collection(db, 'aniversarios'), where('vendedor', '==', nome)))
+      .then(snap => {
+        const mapa = {};
+        snap.docs.forEach(d => { const r = d.data(); if (r.cnpj) mapa[r.cnpj] = r.diaAniversario; });
+        setAniversariosSalvos(mapa);
+      }).catch(console.error);
+  }, [nome]);
+
+  async function salvarAniversario() {
+    if (!modalAniversario || !dataAniversario) return;
+    setSalvandoAniversario(true);
+    try {
+      const mmdd = dataAniversario.slice(5); // YYYY-MM-DD → MM-DD
+      await setDoc(doc(db, 'aniversarios', modalAniversario.cnpj), {
+        cnpj:           modalAniversario.cnpj,
+        vendedor:       nome,
+        cliente:        modalAniversario.nome,
+        diaAniversario: mmdd,
+        atualizadoEm:   serverTimestamp(),
+      });
+      setAniversariosSalvos(prev => ({ ...prev, [modalAniversario.cnpj]: mmdd }));
+      setModalAniversario(null);
+      setDataAniversario('');
+    } catch (err) { console.error(err); }
+    finally { setSalvandoAniversario(false); }
+  }
 
   // Pódio — lê snapshots de hoje do Firestore (pré-calculados pela Cloud Function)
   useEffect(() => {
@@ -747,117 +1612,164 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
     calcularLideres();
   }, []);
 
-  // Progressão de nível do mês — lê snapshots diários pré-calculados
+  // ── Efeito unificado [nome, mes, ano] — 3 queries disparam em PARALELO ──────
+  // Antes: progressão → extrato → histórico (cascata, ~3x mais lento)
+  // Agora: as 3 queries iniciais sobem ao mesmo tempo e resolvem independentemente
   useEffect(() => {
     if (!nome) return;
-    setProgressaoNivel(null);
-
-    async function buscarProgressao() {
-      try {
-        const inicio = `${ano}-${String(mes).padStart(2, '0')}-01`;
-        const fim    = `${ano}-${String(mes).padStart(2, '0')}-31`;
-        const snap   = await getDocs(
-          query(collection(db, 'niveis_diarios'),
-            where('vendedor', '==', nome),
-            where('data',     '>=', inicio),
-            where('data',     '<=', fim),
-          )
-        );
-        if (snap.empty) return;
-
-        const hj             = new Date();
-        const isCurrentMonth = ano === hj.getFullYear() && mes === hj.getMonth() + 1;
-        const lastDay        = isCurrentMonth ? hj.getDate() : new Date(ano, mes, 0).getDate();
-
-        const diasPorNivel = {};
-        let totalDias = 0;
-        snap.docs.forEach(d => {
-          const r   = d.data();
-          const dia = parseInt((r.data || '').split('-')[2], 10);
-          if (dia > lastDay) return;
-          const k = r.nivel ?? '—';
-          diasPorNivel[k] = (diasPorNivel[k] || 0) + 1;
-          totalDias++;
-        });
-
-        // Nível majoritário: mais dias; empate → nível mais alto
-        let nivelMaioria = null, maxDias = 0;
-        Object.entries(diasPorNivel).forEach(([k, cnt]) => {
-          if (k === '—') return;
-          const idx     = NIVEIS_COMERCIAIS.findIndex(n => n.nivel === k);
-          const prevIdx = nivelMaioria ? NIVEIS_COMERCIAIS.findIndex(n => n.nivel === nivelMaioria.nivel) : -1;
-          if (cnt > maxDias || (cnt === maxDias && idx > prevIdx)) {
-            maxDias = cnt;
-            nivelMaioria = NIVEIS_COMERCIAIS[idx];
-          }
-        });
-
-        setProgressaoNivel({ diasPorNivel, nivelMaioria, totalDias });
-      } catch (err) {
-        console.error('Erro ao buscar progressão de nível:', err);
-      }
-    }
-    buscarProgressao();
-  }, [nome, mes, ano]);
-
-  useEffect(() => {
     setFiltroAtrasado(false);
     setExpandidos(new Set());
     setNivelExpanded(false);
-    if (!nome) return;
-    async function buscar() {
-      setCarregando(true);
-      try {
-        const prefixo = `${ano}-${String(mes).padStart(2, '0')}`;
+    setProgressaoNivel(null);
+    setCarregando(true);
+    setHistoricoComissao(h => ({ ...h, carregando: true }));
 
-        // Extrato do mês selecionado — query direta com filtro de data
-        const snap = await getDocs(
-          query(collection(db, 'pedidos'),
-            where('vendedor',  '==', nome),
-            where('dataVenda', '>=', `${prefixo}-01`),
-            where('dataVenda', '<=', `${prefixo}-31`),
-          )
-        );
-        const filtrados = snap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => (b.dataVenda || '').localeCompare(a.dataVenda || ''));
-        setPedidos(filtrados);
+    const prefixo        = `${ano}-${String(mes).padStart(2, '0')}`;
+    const inicio         = `${prefixo}-01`;
+    const fimMes         = `${prefixo}-31`;
 
-        const [fin, cli, snapPag] = await Promise.all([
-          buscarFinanceiro(filtrados),
-          buscarClientes([...new Set(filtrados.map((p) => normalizarCnpj(p.cnpj)).filter(Boolean))]),
-          getDocs(query(collection(db, 'pagamentosComissao'), where('vendedor', '==', nome))),
-        ]);
-        setFinanceiro(fin);
-        setClientes(cli);
-
-        const pago = snapPag.docs
-          .map((d) => d.data())
-          .filter((p) => p.mes === mes && p.ano === ano)
-          .reduce((s, p) => s + Number(p.valor || 0), 0);
-        setTotalPago(pago);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setCarregando(false);
-      }
+    // ── Query 1: progressão de nível (niveis_diarios) ──
+    async function buscarProgressao() {
+      const snap = await getDocs(
+        query(collection(db, 'niveis_diarios'),
+          where('vendedor', '==', nome),
+          where('data',     '>=', inicio),
+          where('data',     '<=', fimMes),
+        )
+      );
+      if (snap.empty) return;
+      const hj             = new Date();
+      const isCurrentMonth = ano === hj.getFullYear() && mes === hj.getMonth() + 1;
+      const lastDay        = isCurrentMonth ? hj.getDate() : new Date(ano, mes, 0).getDate();
+      const diasPorNivel = {};
+      let totalDias = 0;
+      snap.docs.forEach(d => {
+        const r   = d.data();
+        const dia = parseInt((r.data || '').split('-')[2], 10);
+        if (dia > lastDay) return;
+        const k = r.nivel ?? '—';
+        diasPorNivel[k] = (diasPorNivel[k] || 0) + 1;
+        totalDias++;
+      });
+      let nivelMaioria = null, maxDias = 0;
+      Object.entries(diasPorNivel).forEach(([k, cnt]) => {
+        if (k === '—') return;
+        const idx     = NIVEIS_COMERCIAIS.findIndex(n => n.nivel === k);
+        const prevIdx = nivelMaioria ? NIVEIS_COMERCIAIS.findIndex(n => n.nivel === nivelMaioria.nivel) : -1;
+        if (cnt > maxDias || (cnt === maxDias && idx > prevIdx)) { maxDias = cnt; nivelMaioria = NIVEIS_COMERCIAIS[idx]; }
+      });
+      setProgressaoNivel({ diasPorNivel, nivelMaioria, totalDias });
     }
-    buscar();
+
+    // ── Query 2: extrato do mês (pedidos + financeiro + clientes + pagamentos) ──
+    async function buscarExtrato() {
+      const snap = await getDocs(
+        query(collection(db, 'pedidos'),
+          where('vendedor',  '==', nome),
+          where('dataVenda', '>=', inicio),
+          where('dataVenda', '<=', fimMes),
+        )
+      );
+      const filtrados = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.dataVenda || '').localeCompare(a.dataVenda || ''));
+      setPedidos(filtrados);
+
+      const [fin, cli, snapPag] = await Promise.all([
+        buscarFinanceiro(filtrados),
+        buscarClientes([...new Set(filtrados.map((p) => normalizarCnpj(p.cnpj)).filter(Boolean))]),
+        getDocs(query(collection(db, 'pagamentosComissao'), where('vendedor', '==', nome))),
+      ]);
+      setFinanceiro(fin);
+      setClientes(cli);
+      const pago = snapPag.docs
+        .map((d) => d.data())
+        .filter((p) => p.mes === mes && p.ano === ano)
+        .reduce((s, p) => s + Number(p.valor || 0), 0);
+      setTotalPago(pago);
+    }
+
+    // ── Query 3: histórico de comissões de meses anteriores ──
+    // Regras:
+    //   ATRASADO  → conta desde sempre (sem restrição de INICIO_HISTORICO)
+    //   EM_ABERTO → conta apenas a partir de INICIO_HISTORICO
+    //   demais    → conta como saldo quitado apenas a partir de INICIO_HISTORICO
+    const INICIO_HISTORICO = '2026-05-01';
+    const INICIO_ATRASADOS = '2025-01-01'; // janela máxima para buscar atrasados
+    async function buscarHistorico() {
+      // Busca todos os pedidos desde INICIO_ATRASADOS até o mês selecionado
+      // (inclui pedidos anteriores a INICIO_HISTORICO — necessário para capturar atrasados antigos)
+      const snap = await getDocs(query(
+        collection(db, 'pedidos'),
+        where('vendedor',  '==', nome),
+        where('dataVenda', '>=', INICIO_ATRASADOS),
+        where('dataVenda', '<',  inicio),
+      ));
+      const pedidosAnt = snap.docs.map(d => d.data());
+      if (!pedidosAnt.length) {
+        setHistoricoComissao({ emAberto: 0, saldo: 0, atrasado: 0, carregando: false });
+        return;
+      }
+      const finIds = [...new Set(pedidosAnt.map(finId).filter(Boolean))];
+      const lotes  = [];
+      for (let i = 0; i < finIds.length; i += 30) lotes.push(finIds.slice(i, i + 30));
+      const snaps  = await Promise.all(
+        lotes.map(lote => getDocs(query(collection(db, 'financeiro'), where('docId', 'in', lote))))
+      );
+      const finMap = {};
+      snaps.forEach(s => s.docs.forEach(d => { const r = d.data(); finMap[r.docId] = r.statusGeral || 'EM_ABERTO'; }));
+      let emAberto = 0, saldo = 0, atrasado = 0;
+      pedidosAnt.forEach(p => {
+        const com = Number(p.comissao || 0);
+        if (!com) return;
+        const status = finMap[finId(p)];
+        if (status === 'ATRASADO') {
+          atrasado += com; // conta sempre, independente da data da venda
+        } else if ((p.dataVenda || '') >= INICIO_HISTORICO) {
+          // EM_ABERTO e SALDO só contam a partir de INICIO_HISTORICO
+          if (status === 'EM_ABERTO') emAberto += com;
+          else                        saldo    += com; // RECEBIDO ou sem registro → quitado
+        }
+      });
+      setHistoricoComissao({ emAberto, saldo, atrasado, carregando: false });
+    }
+
+    // Dispara tudo em paralelo — resolve independentemente conforme cada query retorna
+    Promise.all([
+      buscarProgressao().catch(() => {}),
+      buscarExtrato().catch(err => { console.error(err); }).finally(() => setCarregando(false)),
+      buscarHistorico().catch(() => setHistoricoComissao({ emAberto: 0, saldo: 0, atrasado: 0, carregando: false })),
+    ]);
   }, [nome, mes, ano]);
 
-  function toggleExpandir(id) {
+  const toggleExpandir = useCallback((id) => {
     setExpandidos((prev) => {
       const novo = new Set(prev);
       novo.has(id) ? novo.delete(id) : novo.add(id);
       return novo;
     });
-  }
+  }, []);
 
-  const totalFaturamento  = pedidos.reduce((s, p) => s + Number(p.faturamento || 0), 0);
-  const totalComissao     = pedidos.reduce((s, p) => s + Number(p.comissao    || 0), 0);
-  const comissaoPaga      = pedidos.filter((p) => financeiro[finId(p)]?.statusGeral === 'RECEBIDO').reduce((s, p) => s + Number(p.comissao || 0), 0);
-  const comissaoBloqueada    = pedidos.filter((p) => financeiro[finId(p)]?.statusGeral === 'ATRASADO').reduce((s, p) => s + Number(p.comissao    || 0), 0);
-  const faturamentoBloqueado = pedidos.filter((p) => financeiro[finId(p)]?.statusGeral === 'ATRASADO').reduce((s, p) => s + Number(p.faturamento || 0), 0);
+  // ── Cálculos derivados memoizados — só recalculam quando pedidos/financeiro mudam ──
+  const totais = useMemo(() => {
+    let totalFaturamento  = 0;
+    let totalComissao     = 0;
+    let comissaoPaga      = 0;
+    let comissaoBloqueada    = 0;
+    let faturamentoBloqueado = 0;
+    for (const p of pedidos) {
+      const fat = Number(p.faturamento || 0);
+      const com = Number(p.comissao    || 0);
+      const st  = financeiro[finId(p)]?.statusGeral;
+      totalFaturamento  += fat;
+      totalComissao     += com;
+      if (st === 'RECEBIDO') comissaoPaga        += com;
+      if (st === 'ATRASADO') { comissaoBloqueada += com; faturamentoBloqueado += fat; }
+    }
+    return { totalFaturamento, totalComissao, comissaoPaga, comissaoBloqueada, faturamentoBloqueado };
+  }, [pedidos, financeiro]);
+
+  const { totalFaturamento, totalComissao, comissaoPaga, comissaoBloqueada, faturamentoBloqueado } = totais;
 
   // ── Nível do mês (majoritário — nível em que ficou por mais dias) ────────
   const nivelDoMes   = progressaoNivel?.nivelMaioria ?? null;
@@ -867,35 +1779,49 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
 
   const saldo = (comissaoPaga + adicionalMes) - totalPago;
 
-  // ── Métricas para nível comercial (sempre mês anterior) ────────────────
-  // Mantidas como fallback enquanto metricasNivel carrega
-  const clientesAtivos  = new Set(pedidos.map((p) => normalizarCnpj(p.cnpj) || p.cliente).filter(Boolean)).size;
-  const fatPorCliente   = clientesAtivos > 0 ? totalFaturamento / clientesAtivos : 0;
-  const inadimplencia   = totalFaturamento > 0 ? faturamentoBloqueado / totalFaturamento : 0;
+  // ── Métricas e nível — memoizados ────────────────────────────────────────
+  const nivelCalc = useMemo(() => {
+    const clientesAtivos  = new Set(pedidos.map((p) => normalizarCnpj(p.cnpj) || p.cliente).filter(Boolean)).size;
+    const fatPorCliente   = clientesAtivos > 0 ? totalFaturamento / clientesAtivos : 0;
+    const inadimplencia   = totalFaturamento > 0 ? faturamentoBloqueado / totalFaturamento : 0;
+    const mNivel = metricasNivel ?? { totalFat: totalFaturamento, totalCom: totalComissao, clientesAtivos, fatPorCliente, inadimplencia };
 
-  // Nível é baseado no fechamento do mês anterior (metricasNivel), com fallback para o mês atual
-  const mNivel = metricasNivel ?? { totalFat: totalFaturamento, totalCom: totalComissao, clientesAtivos, fatPorCliente, inadimplencia };
+    const comissaoPercentNivel      = mNivel.totalFat > 0 ? (mNivel.totalCom / mNivel.totalFat) * 100 : 0;
+    const inadimplenciaPercentNivel = mNivel.inadimplencia * 100;
 
-  // comissaoMinima e inadimplenciaMax estão em % (ex: 3 = 3%) | fatPorClienteMin em R$
-  const comissaoPercentNivel      = mNivel.totalFat > 0 ? (mNivel.totalCom / mNivel.totalFat) * 100 : 0;
-  const inadimplenciaPercentNivel = mNivel.inadimplencia * 100;
+    const passaNivel = (n) =>
+      comissaoPercentNivel      >= n.comissaoMinima    &&
+      inadimplenciaPercentNivel <= n.inadimplenciaMax  &&
+      mNivel.clientesAtivos     >= n.clientesAtivosMin &&
+      mNivel.fatPorCliente      >= n.fatPorClienteMin;
 
-  // "N+" = N.5 para ordenação correta (1 < 1+ < 2 < 2+ ...)
-  // NIVEIS_COMERCIAIS já está ordenado, mas a função garante para o reverse().find()
-  const passaNivel = (n) =>
-    comissaoPercentNivel      >= n.comissaoMinima    &&
-    inadimplenciaPercentNivel <= n.inadimplenciaMax  &&
-    mNivel.clientesAtivos     >= n.clientesAtivosMin &&
-    mNivel.fatPorCliente      >= n.fatPorClienteMin;
+    const nivelAtual = [...NIVEIS_COMERCIAIS].reverse().find(passaNivel) ?? null;
+    const nivelAlvo  = NIVEIS_COMERCIAIS.find((n) => !passaNivel(n)) ?? null;
 
-  // Nível atual = o mais difícil que passa (último na lista, que já está easiest→hardest)
-  const nivelAtual = [...NIVEIS_COMERCIAIS].reverse().find(passaNivel) ?? null;
+    const passaNivelSemInadimpl = (n) =>
+      comissaoPercentNivel  >= n.comissaoMinima    &&
+      3                     <= n.inadimplenciaMax  &&
+      mNivel.clientesAtivos >= n.clientesAtivosMin &&
+      mNivel.fatPorCliente  >= n.fatPorClienteMin;
+    const nivelSeInadimplOk = [...NIVEIS_COMERCIAIS].reverse().find(passaNivelSemInadimpl) ?? null;
 
-  // Próximo nível = o primeiro que ainda não passa
-  const nivelAlvo = NIVEIS_COMERCIAIS.find((n) => !passaNivel(n)) ?? null;
+    const idxAlvo       = nivelAlvo       ? NIVEIS_COMERCIAIS.indexOf(nivelAlvo)       : -1;
+    const idxSeInadimpl = nivelSeInadimplOk ? NIVEIS_COMERCIAIS.indexOf(nivelSeInadimplOk) : -1;
+    const nivelRef = (idxSeInadimpl > idxAlvo) ? nivelSeInadimplOk : nivelAlvo;
 
-  const vendas = agruparPorVenda(pedidos, financeiro, clientes);
-  const vendasVisiveis = filtroAtrasado ? vendas.filter((v) => v.status === 'ATRASADO') : vendas;
+    return { mNivel, comissaoPercentNivel, inadimplenciaPercentNivel, nivelAtual, nivelAlvo, nivelRef };
+  }, [pedidos, financeiro, metricasNivel, totalFaturamento, totalComissao, faturamentoBloqueado]);
+
+  const { mNivel, comissaoPercentNivel, inadimplenciaPercentNivel, nivelAtual, nivelAlvo, nivelRef } = nivelCalc;
+
+  const vendas = useMemo(
+    () => agruparPorVenda(pedidos, financeiro, clientes),
+    [pedidos, financeiro, clientes]
+  );
+  const vendasVisiveis = useMemo(
+    () => filtroAtrasado ? vendas.filter((v) => v.status === 'ATRASADO') : vendas,
+    [vendas, filtroAtrasado]
+  );
 
   return (
     <div style={styles.page}>
@@ -906,6 +1832,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
             <div>
               <h1 style={styles.headerTitle}>Painel P3</h1>
               <p style={styles.headerSub}>{nomeDisplay}</p>
+              <p style={{ margin: 0, fontSize: '11px', opacity: 0.65, marginTop: '3px', fontStyle: 'italic' }}>Selecionamos os melhores insumos para o seu Restaurante</p>
             </div>
           </div>
           {!onVoltar && <button onClick={logout} style={styles.btnSair}>Sair</button>}
@@ -914,11 +1841,12 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
         {/* Abas de navegação */}
         <div style={styles.abas}>
           {[
-            { id: 'meta',     label: '📊 Painel Geral' },
-            { id: 'extrato',  label: '💰 Extrato de Comissões' },
-            { id: 'clientes', label: '🏢 Clientes' },
-            { id: 'produtos', label: '📦 Produtos' },
             { id: 'hoje',     label: '📅 Hoje' },
+            { id: 'meta',     label: '🎯 Metas' },
+            { id: 'extrato',  label: '💰 Extrato' },
+            { id: 'clientes', label: '🏢 Clientes' },
+            { id: 'produtos',    label: '📊 Performance Individual' },
+            { id: 'diagnostico', label: '🔍 Diagnóstico do Cliente' },
           ].map((a) => (
             <button
               key={a.id}
@@ -939,18 +1867,46 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
 
         {/* ── ABA HOJE ───────────────────────────────────── */}
         {aba === 'hoje' && (
-          <LinhaDoTempo vendedorNome={nome} />
+          <Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', color: '#9ca3af' }}>Carregando...</div>}>
+            <LinhaDoTempo vendedorNome={nome} nivelAtual={metricasNivel?.nivel ?? null} />
+          </Suspense>
         )}
 
         {/* ── ABA EXTRATO ────────────────────────────────── */}
         {aba === 'extrato' && (<>
-          <div style={styles.filtros}>
-            <select value={mes} onChange={(e) => setMes(Number(e.target.value))} style={styles.select}>
-              {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-            </select>
-            <select value={ano} onChange={(e) => setAno(Number(e.target.value))} style={styles.select}>
-              {anos.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
+          <div style={{ ...styles.filtros, alignItems: 'center', justifyContent: 'space-between' }}>
+            {/* Seletores de mês/ano */}
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <select value={mes} onChange={(e) => setMes(Number(e.target.value))} style={styles.select}>
+                {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+              </select>
+              <select value={ano} onChange={(e) => setAno(Number(e.target.value))} style={styles.select}>
+                {ANOS_DISPONIVEIS.map((a) => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
+
+            {/* Resumo de comissões de meses anteriores */}
+            <div style={{ background: '#fff', borderRadius: '10px', padding: '10px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.07)', border: '1px solid #e5e7eb', display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: '11px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
+                Meses anteriores
+              </span>
+              {historicoComissao.carregando ? (
+                <span style={{ fontSize: '12px', color: '#9ca3af' }}>Carregando…</span>
+              ) : (<>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                  <span style={{ fontSize: '10px', color: '#9ca3af', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Em aberto</span>
+                  <span style={{ fontSize: '13px', fontWeight: '700', color: '#6b7280' }}>{moeda(historicoComissao.emAberto)}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                  <span style={{ fontSize: '10px', color: '#16a34a', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Saldo</span>
+                  <span style={{ fontSize: '13px', fontWeight: '700', color: '#16a34a' }}>{moeda(historicoComissao.saldo)}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                  <span style={{ fontSize: '10px', color: '#dc2626', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Atrasado</span>
+                  <span style={{ fontSize: '13px', fontWeight: '700', color: '#dc2626' }}>{moeda(historicoComissao.atrasado)}</span>
+                </div>
+              </>)}
+            </div>
           </div>
 
           {/* Banner do nível do mês */}
@@ -1231,7 +2187,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
               <GrupoClientes
                 titulo="🔒 Bloqueados"
                 cor="#dc2626"
-                lista={todosClientes.filter((c) => estaBloqueado(c.statusBloqueio))}
+                lista={todosClientes.filter((c) => estaBloqueado(c.statusBloqueio)).sort((a, b) => a.diasAtraso - b.diasAtraso)}
                 defaultAberto={true}
               />
 
@@ -1269,11 +2225,26 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
                             )}
                           </div>
                           {/* Detalhes */}
-                          <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: '#6b7280', flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: '#6b7280', flexWrap: 'wrap', alignItems: 'center' }}>
                             {c.cidade && <span>{c.cidade}</span>}
                             {c.fatMedioMensal > 0 && <span>Fat. médio/mês: <strong style={{ color: '#111827' }}>{moeda(c.fatMedioMensal)}</strong></span>}
-                            {c.pontuacao > 0 && <span>Pontuação: {moeda(c.pontuacao)}</span>}
+                            <span>Com. 30d: <strong style={{ color: c.comissao30d > 0 ? '#16a34a' : '#9ca3af' }}>{moeda(c.comissao30d)}</strong></span>
                             {c.score != null && <span>Score: {c.score}</span>}
+                            {aniversariosSalvos[c.cnpj] && (
+                              <span style={{ color: '#d97706', fontWeight: '700' }}>
+                                🎂 {aniversariosSalvos[c.cnpj].split('-').reverse().join('/')}
+                              </span>
+                            )}
+                            <button
+                              onClick={() => {
+                                const mmdd = aniversariosSalvos[c.cnpj];
+                                setModalAniversario({ cnpj: c.cnpj, nome: c.nome });
+                                setDataAniversario(mmdd ? `2000-${mmdd}` : '');
+                              }}
+                              style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '6px', border: '1px solid #e5e7eb', background: '#fff', color: '#6b7280', cursor: 'pointer', fontFamily: 'inherit', marginLeft: 'auto' }}
+                            >
+                              🎂 {aniversariosSalvos[c.cnpj] ? 'Editar aniversário' : 'Informar aniversário'}
+                            </button>
                           </div>
                         </div>
                       );
@@ -1291,20 +2262,41 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
         {/* ── ABA META ───────────────────────────────────── */}
         {aba === 'meta' && (<>
 
-          {/* 1. Ranking compacto */}
-          {metricasVendedores === null ? (
-            <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', textAlign: 'center', color: '#9ca3af', fontSize: '13px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', marginBottom: '16px' }}>
-              ⏳ Carregando ranking...
-            </div>
-          ) : metricasVendedores.length === 0 ? (
-            <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', textAlign: 'center', color: '#9ca3af', fontSize: '13px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', marginBottom: '16px' }}>
-              Sem dados de vendedores para o período.
-            </div>
-          ) : (
-            <RankingNiveis metricasVendedores={metricasVendedores} vendedorAtual={nome} />
-          )}
+          {/* ══ SEÇÃO SUPERIOR: META DE FATURAMENTO ══ */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '4px 0 12px' }}>
+            <div style={{ flex: 1, height: '1px', background: '#e5e7eb' }} />
+            <span style={{ fontSize: '11px', fontWeight: '800', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>📈 Meta de Faturamento</span>
+            <div style={{ flex: 1, height: '1px', background: '#e5e7eb' }} />
+          </div>
 
-          {/* 2. Nível Comercial (painel pessoal — só para o próprio vendedor) */}
+          {/* Filtros de mês/ano */}
+          <div style={styles.filtros}>
+            <select value={mes} onChange={(e) => setMes(Number(e.target.value))} style={styles.select}>
+              {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+            </select>
+            <select value={ano} onChange={(e) => setAno(Number(e.target.value))} style={styles.select}>
+              {ANOS_DISPONIVEIS.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+
+          {/* Régua de metas */}
+          <MetaCard vendedor={nome} mes={mes} ano={ano} fatAtual={totalFaturamento} />
+
+          {/* Gráfico de barras mensal */}
+          <GraficoVendasMensais
+            vendedor={nome}
+            titulo="Seu faturamento mensal · últimos 12 meses"
+            showTendencia={false}
+          />
+
+          {/* ══ SEÇÃO INFERIOR: META DE NÍVEIS ══ */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '20px 0 12px' }}>
+            <div style={{ flex: 1, height: '1px', background: '#e5e7eb' }} />
+            <span style={{ fontSize: '11px', fontWeight: '800', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>🏆 Meta de Níveis</span>
+            <div style={{ flex: 1, height: '1px', background: '#e5e7eb' }} />
+          </div>
+
+          {/* Card do nível de hoje */}
           {metricasNivel && (
             <div style={{ background: '#fff', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', marginTop: '16px' }}>
 
@@ -1332,10 +2324,10 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
               {/* Critérios do próximo nível */}
               {nivelAlvo ? (() => {
                 const criterios = [
-                  { label: 'Comissão do mês',       atual: comissaoPercentNivel,      ref: nivelAlvo.comissaoMinima,    tipo: 'min', formatar: (v) => `${v.toFixed(1)}%` },
-                  { label: 'Inadimplência',          atual: inadimplenciaPercentNivel, ref: nivelAlvo.inadimplenciaMax,  tipo: 'max', formatar: (v) => `${v.toFixed(1)}%` },
-                  { label: 'Clientes ativos',        atual: mNivel.clientesAtivos,     ref: nivelAlvo.clientesAtivosMin, tipo: 'min', formatar: (v) => `${v}`             },
-                  { label: 'Fat. médio por cliente', atual: mNivel.fatPorCliente,      ref: nivelAlvo.fatPorClienteMin,  tipo: 'min', formatar: moeda                     },
+                  { label: 'Comissão do mês',       atual: comissaoPercentNivel,      ref: nivelRef.comissaoMinima,    tipo: 'min', formatar: (v) => `${v.toFixed(1)}%` },
+                  { label: 'Inadimplência',          atual: inadimplenciaPercentNivel, ref: nivelRef.inadimplenciaMax,  tipo: 'max', formatar: (v) => `${v.toFixed(1)}%` },
+                  { label: 'Clientes ativos',        atual: mNivel.clientesAtivos,     ref: nivelRef.clientesAtivosMin, tipo: 'min', formatar: (v) => `${v}`             },
+                  { label: 'Fat. médio por cliente', atual: mNivel.fatPorCliente,      ref: nivelRef.fatPorClienteMin,  tipo: 'min', formatar: moeda                     },
                 ];
                 const passou = (c) => c.tipo === 'min' ? c.atual >= c.ref : c.atual <= c.ref;
                 const faltando = criterios.filter((c) => !passou(c));
@@ -1348,17 +2340,18 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
 
                       const gerarInsight = (c) => {
                         if (c.label === 'Inadimplência') {
-                          const precisaReceber = Math.max(0, fatBloqNivel - mNivel.totalFat * (nivelAlvo.inadimplenciaMax / 100));
+                          const precisaReceber = Math.max(0, fatBloqNivel - mNivel.totalFat * (nivelRef.inadimplenciaMax / 100));
+                          const bonus = nivelRef.adicionalComissao > 0 ? ` (+${nivelRef.adicionalComissao}% de comissão)` : '';
                           return {
                             emoji: '💸',
-                            texto: `Receba ${moeda(precisaReceber)} dos ${moeda(fatBloqNivel)} em atraso — sua inadimplência cai para ${nivelAlvo.inadimplenciaMax}% e você atinge o Nível ${nivelAlvo.nivel}`,
+                            texto: `Receba ${moeda(precisaReceber)} dos ${moeda(fatBloqNivel)} em atraso — sua inadimplência cai para ${nivelRef.inadimplenciaMax}% e você atinge o Nível ${nivelRef.nivel}${bonus}`,
                           };
                         }
                         if (c.label === 'Clientes ativos') {
-                          const faltam = nivelAlvo.clientesAtivosMin - mNivel.clientesAtivos;
+                          const faltam = nivelRef.clientesAtivosMin - mNivel.clientesAtivos;
                           return {
                             emoji: '🤝',
-                            texto: `Abra ${faltam} novo${faltam > 1 ? 's' : ''} cliente${faltam > 1 ? 's' : ''} ativo${faltam > 1 ? 's' : ''} — você precisa de ${nivelAlvo.clientesAtivosMin} para o Nível ${nivelAlvo.nivel}, tem ${mNivel.clientesAtivos}`,
+                            texto: `Abra ${faltam} novo${faltam > 1 ? 's' : ''} cliente${faltam > 1 ? 's' : ''} ativo${faltam > 1 ? 's' : ''} — você precisa de ${nivelRef.clientesAtivosMin} para o Nível ${nivelRef.nivel}, tem ${mNivel.clientesAtivos}`,
                           };
                         }
                         if (c.label === 'Fat. médio por cliente') {
@@ -1379,19 +2372,19 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
                             const meuPct = melhorCat.pctPorVendedor[nome];
                             return {
                               emoji: '📦',
-                              texto: `Foque em vender mais ${melhorCat.categoria}: ${normalizarVendedor(melhorCat.destaqueVendedor)} dedica ${melhorCat.destaquePercent.toFixed(1)}% das vendas nessa categoria, você apenas ${meuPct.toFixed(1)}% — é seu maior gap para atingir o Nível ${nivelAlvo.nivel}`,
+                              texto: `Foque em vender mais ${melhorCat.categoria}: ${normalizarVendedor(melhorCat.destaqueVendedor)} dedica ${melhorCat.destaquePercent.toFixed(1)}% das vendas nessa categoria, você apenas ${meuPct.toFixed(1)}% — é seu maior gap para atingir o Nível ${nivelRef.nivel}`,
                             };
                           }
-                          const faltaFat = Math.max(0, nivelAlvo.fatPorClienteMin - mNivel.fatPorCliente);
+                          const faltaFat = Math.max(0, nivelRef.fatPorClienteMin - mNivel.fatPorCliente);
                           return {
                             emoji: '📈',
-                            texto: `Aumente ${moeda(Math.round(faltaFat))} por cliente para atingir o Nível ${nivelAlvo.nivel} — meta: ${moeda(nivelAlvo.fatPorClienteMin)}/cliente, você está em ${moeda(Math.round(mNivel.fatPorCliente))}`,
+                            texto: `Aumente ${moeda(Math.round(faltaFat))} por cliente para atingir o Nível ${nivelRef.nivel} — meta: ${moeda(nivelRef.fatPorClienteMin)}/cliente, você está em ${moeda(Math.round(mNivel.fatPorCliente))}`,
                           };
                         }
                         if (c.label === 'Comissão do mês') {
                           return {
                             emoji: '💰',
-                            texto: `Foque em produtos de maior margem para subir sua comissão de ${c.atual.toFixed(1)}% para ${nivelAlvo.comissaoMinima}% e atingir o Nível ${nivelAlvo.nivel}`,
+                            texto: `Foque em produtos de maior margem para subir sua comissão de ${c.atual.toFixed(1)}% para ${nivelRef.comissaoMinima}% e atingir o Nível ${nivelRef.nivel}`,
                           };
                         }
                         return null;
@@ -1417,7 +2410,7 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
                         return (
                           <div style={{ margin: '14px 0 4px', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '8px', padding: '10px 14px' }}>
                             <p style={{ margin: '0 0 8px', fontSize: '12px', fontWeight: '700', color: '#92400e' }}>
-                              ⚡ Para atingir o Nível {nivelAlvo.nivel}:
+                              ⚡ Para atingir o Nível {nivelRef.nivel}:
                             </p>
                             {insights.map(ins => (
                               <div key={ins.label} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', marginBottom: '5px' }}>
@@ -1461,94 +2454,321 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
             </div>
           )}
 
-          {/* 3. Filtros + Meta */}
-          <div style={styles.filtros}>
-            <select value={mes} onChange={(e) => setMes(Number(e.target.value))} style={styles.select}>
-              {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-            </select>
-            <select value={ano} onChange={(e) => setAno(Number(e.target.value))} style={styles.select}>
-              {anos.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </div>
-          <MetaCard vendedor={nome} mes={mes} ano={ano} fatAtual={totalFaturamento} />
-
-          {/* 4. Gráfico de faturamento mensal — sem linha de tendência */}
-          <GraficoVendasMensais
-            vendedor={nome}
-            titulo="Seu faturamento mensal · últimos 12 meses"
-            showTendencia={false}
-          />
+          {/* Troféus / Ranking de níveis */}
+          {metricasVendedores === null ? (
+            <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', textAlign: 'center', color: '#9ca3af', fontSize: '13px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', marginBottom: '16px' }}>
+              ⏳ Carregando ranking...
+            </div>
+          ) : metricasVendedores.length === 0 ? (
+            <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', textAlign: 'center', color: '#9ca3af', fontSize: '13px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', marginBottom: '16px' }}>
+              Sem dados de vendedores para o período.
+            </div>
+          ) : (
+            <RankingNiveis metricasVendedores={metricasVendedores} vendedorAtual={nome} />
+          )}
 
         </>)}
 
-        {/* ── ABA PRODUTOS ────────────────────────────────── */}
-        {aba === 'produtos' && (
-          <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>
-              <p style={{ margin: 0, fontSize: '11px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                🥇 Líder de Vendas por Categoria · últimos 30 dias
+        {/* ── ABA PERFORMANCE INDIVIDUAL ───────────────────── */}
+        {aba === 'produtos' && (() => {
+          const oportunidades = lideres === null ? null : lideres
+            .filter(l => normalizarVendedor(l.destaqueVendedor) !== normalizarVendedor(nome))
+            .map(l => ({
+              ...l,
+              meuPct: l.pctPorVendedor?.[nome] ?? 0,
+              diff:   l.destaquePercent - (l.pctPorVendedor?.[nome] ?? 0),
+            }))
+            .sort((a, b) => b.diff - a.diff);
+
+          const mesAtualKey = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+              {/* ── Tabela histórico 12 meses ── */}
+              <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                  <p style={{ margin: 0, fontSize: '12px', fontWeight: '700', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    📅 Histórico · Últimos 12 Meses
+                  </p>
+                  <button onClick={() => setHistoricoMensal(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '16px', padding: '2px 4px', lineHeight: 1 }} title="Recarregar">↺</button>
+                </div>
+                {historicoMensal === null ? (
+                  <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', margin: '12px 0' }}>⏳ Carregando...</p>
+                ) : (
+                  <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', margin: '0 -16px', padding: '0 16px 4px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '360px' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '2px solid #f3f4f6' }}>
+                          <th style={{ padding: '5px 8px', textAlign: 'left',   color: '#9ca3af', fontWeight: '600', whiteSpace: 'nowrap' }}>Mês</th>
+                          <th style={{ padding: '5px 8px', textAlign: 'right',  color: '#9ca3af', fontWeight: '600', whiteSpace: 'nowrap' }}>Faturamento</th>
+                          <th style={{ padding: '5px 8px', textAlign: 'center', color: '#9ca3af', fontWeight: '600', whiteSpace: 'nowrap' }}>Novos</th>
+                          <th style={{ padding: '5px 8px', textAlign: 'center', color: '#9ca3af', fontWeight: '600', whiteSpace: 'nowrap' }}>Visitas</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...historicoMensal].reverse().map((m, i) => {
+                          const atual = m.key === mesAtualKey;
+                          return (
+                            <tr key={m.key} style={{ background: atual ? '#eff6ff' : i % 2 === 0 ? '#fafafa' : '#fff', borderBottom: '1px solid #f3f4f6' }}>
+                              <td style={{ padding: '7px 8px', fontWeight: atual ? '700' : '500', color: atual ? '#1d4ed8' : '#374151', whiteSpace: 'nowrap' }}>
+                                {m.label}{atual ? ' ●' : ''}
+                              </td>
+                              <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: '600', color: m.faturamento > 0 ? '#111827' : '#d1d5db' }}>
+                                {m.faturamento > 0 ? moeda(m.faturamento) : '—'}
+                              </td>
+                              <td style={{ padding: '7px 8px', textAlign: 'center', fontWeight: m.clientesNovos > 0 ? '700' : '400', color: m.clientesNovos > 0 ? '#16a34a' : '#d1d5db' }}>
+                                {m.clientesNovos > 0 ? `+${m.clientesNovos}` : '—'}
+                              </td>
+                              <td style={{ padding: '7px 8px', textAlign: 'center', color: m.visitas > 0 ? '#0f3460' : '#d1d5db' }}>
+                                {m.visitas > 0 ? m.visitas : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Insights */}
+              <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>
+                  <p style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#111827' }}>
+                    🥇 Líder de Vendas por Categoria
+                  </p>
+                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>últimos 30 dias</span>
+                </div>
+
+                {oportunidades === null ? (
+                  <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', margin: '16px 0' }}>⏳ Carregando...</p>
+                ) : oportunidades.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                    <p style={{ fontSize: '28px', margin: '0 0 8px' }}>🏆</p>
+                    <p style={{ margin: 0, fontSize: '14px', fontWeight: '700', color: '#111827' }}>Você lidera todas as categorias!</p>
+                    <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#9ca3af' }}>Nenhuma oportunidade identificada no período.</p>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {oportunidades.map(l => {
+                      const urgencia = l.diff >= 20 ? 'alta' : l.diff >= 10 ? 'media' : 'baixa';
+                      const corBorda = urgencia === 'alta' ? '#fbbf24' : urgencia === 'media' ? '#a3e635' : '#e5e7eb';
+                      const corBg    = urgencia === 'alta' ? '#fefce8' : urgencia === 'media' ? '#f7fee7' : '#fafafa';
+                      const corTag   = urgencia === 'alta' ? { bg: '#fef3c7', text: '#92400e' } : urgencia === 'media' ? { bg: '#ecfccb', text: '#3f6212' } : { bg: '#f3f4f6', text: '#6b7280' };
+                      const tagLabel = urgencia === 'alta' ? '🔥 Alta oportunidade' : urgencia === 'media' ? '📈 Oportunidade' : '💡 Para observar';
+                      return (
+                        <div key={l.categoria} style={{ borderRadius: '10px', border: `1px solid ${corBorda}`, background: corBg, padding: '12px 14px' }}>
+                          {/* Linha 1: categoria + faturamento total */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                            <span style={{ fontSize: '14px', fontWeight: '700', color: '#111827' }}>{l.categoria}</span>
+                            <span style={{ fontSize: '11px', color: '#6b7280' }}>{moeda(l.totalFat)} no período</span>
+                          </div>
+                          {/* Linha 2: comparativo */}
+                          <div style={{ display: 'flex', gap: '16px', marginBottom: '10px' }}>
+                            <div>
+                              <p style={{ margin: 0, fontSize: '10px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Líder</p>
+                              <p style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#374151' }}>
+                                {normalizarVendedor(l.destaqueVendedor)} · <span style={{ color: '#d97706' }}>{l.destaquePercent.toFixed(1)}%</span>
+                              </p>
+                            </div>
+                            <div>
+                              <p style={{ margin: 0, fontSize: '10px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Você</p>
+                              <p style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#374151' }}>
+                                <span style={{ color: '#1d4ed8' }}>{l.meuPct.toFixed(1)}%</span>
+                              </p>
+                            </div>
+                            <div>
+                              <p style={{ margin: 0, fontSize: '10px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Gap</p>
+                              <p style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#dc2626' }}>+{l.diff.toFixed(1)}pp</p>
+                            </div>
+                          </div>
+                          {/* Tag de urgência */}
+                          <span style={{ display: 'inline-block', fontSize: '11px', fontWeight: '700', padding: '3px 9px', borderRadius: '20px', background: corTag.bg, color: corTag.text }}>
+                            {tagLabel}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Tendência por Categoria ───────────────────── */}
+              <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>
+                  <p style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#111827' }}>
+                    📊 Evolução por Categoria
+                  </p>
+                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>média 3 meses vs últimos 30 dias</span>
+                </div>
+
+                {trendCategorias === null ? (
+                  <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', margin: '16px 0' }}>⏳ Carregando...</p>
+                ) : trendCategorias.length === 0 ? (
+                  <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', margin: '16px 0' }}>Sem dados suficientes no período.</p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {trendCategorias.map(t => {
+                      const ganhando = t.delta >= 10;
+                      const perdendo = t.delta <= -10;
+                      const corBorda = ganhando ? '#86efac' : perdendo ? '#fca5a5' : '#e5e7eb';
+                      const corBg    = ganhando ? '#f0fdf4' : perdendo ? '#fff1f2' : '#fafafa';
+                      const corDelta = ganhando ? '#16a34a' : perdendo ? '#dc2626' : '#6b7280';
+                      const sinal    = t.delta > 0 ? '+' : '';
+                      const label    = ganhando ? '📈 Ganhando espaço' : perdendo ? '📉 Perdendo espaço' : '→ Estável';
+                      const corLabel = ganhando ? { bg: '#dcfce7', text: '#15803d' } : perdendo ? { bg: '#fee2e2', text: '#b91c1c' } : { bg: '#f3f4f6', text: '#6b7280' };
+                      return (
+                        <div key={t.key} style={{ borderRadius: '10px', border: `1px solid ${corBorda}`, background: corBg, padding: '12px 14px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <span style={{ fontSize: '14px', fontWeight: '700', color: '#111827' }}>{t.key}</span>
+                            <span style={{ fontSize: '13px', fontWeight: '800', color: corDelta }}>{sinal}{t.delta.toFixed(1)}pp</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '20px', marginBottom: '10px' }}>
+                            <div>
+                              <p style={{ margin: 0, fontSize: '10px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Média 3 meses</p>
+                              <p style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#374151' }}>{t.rep3m.toFixed(1)}%</p>
+                              <p style={{ margin: 0, fontSize: '11px', color: '#9ca3af' }}>{moeda(t.media)}/mês</p>
+                            </div>
+                            <div>
+                              <p style={{ margin: 0, fontSize: '10px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Últimos 30 dias</p>
+                              <p style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#374151' }}>{t.rep30.toFixed(1)}%</p>
+                              <p style={{ margin: 0, fontSize: '11px', color: '#9ca3af' }}>{moeda(t.f30)}</p>
+                            </div>
+                          </div>
+                          <span style={{ display: 'inline-block', fontSize: '11px', fontWeight: '700', padding: '3px 9px', borderRadius: '20px', background: corLabel.bg, color: corLabel.text }}>
+                            {label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Evolução por Produto ──────────────────────── */}
+              <div style={{ background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>
+                  <p style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#111827' }}>
+                    🧴 Evolução por Produto
+                  </p>
+                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>média 3 meses vs últimos 30 dias</span>
+                </div>
+
+                {trendProdutos === null ? (
+                  <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', margin: '16px 0' }}>⏳ Carregando...</p>
+                ) : trendProdutos.length === 0 ? (
+                  <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', margin: '16px 0' }}>Sem dados suficientes no período.</p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {trendProdutos.map(t => {
+                      const ganhando = t.delta >= 10;
+                      const perdendo = t.delta <= -10;
+                      const corBorda = ganhando ? '#86efac' : perdendo ? '#fca5a5' : '#e5e7eb';
+                      const corBg    = ganhando ? '#f0fdf4' : perdendo ? '#fff1f2' : '#fafafa';
+                      const corDelta = ganhando ? '#16a34a' : perdendo ? '#dc2626' : '#6b7280';
+                      const sinal    = t.delta > 0 ? '+' : '';
+                      const label    = ganhando ? '📈 Ganhando espaço' : perdendo ? '📉 Perdendo espaço' : '→ Estável';
+                      const corLabel = ganhando ? { bg: '#dcfce7', text: '#15803d' } : perdendo ? { bg: '#fee2e2', text: '#b91c1c' } : { bg: '#f3f4f6', text: '#6b7280' };
+                      return (
+                        <div key={t.key} style={{ borderRadius: '10px', border: `1px solid ${corBorda}`, background: corBg, padding: '12px 14px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <span style={{ fontSize: '14px', fontWeight: '700', color: '#111827' }}>{t.key}</span>
+                            <span style={{ fontSize: '13px', fontWeight: '800', color: corDelta }}>{sinal}{t.delta.toFixed(1)}pp</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '20px', marginBottom: '10px' }}>
+                            <div>
+                              <p style={{ margin: 0, fontSize: '10px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Média 3 meses</p>
+                              <p style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#374151' }}>{t.rep3m.toFixed(1)}%</p>
+                              <p style={{ margin: 0, fontSize: '11px', color: '#9ca3af' }}>{moeda(t.media)}/mês</p>
+                            </div>
+                            <div>
+                              <p style={{ margin: 0, fontSize: '10px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Últimos 30 dias</p>
+                              <p style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#374151' }}>{t.rep30.toFixed(1)}%</p>
+                              <p style={{ margin: 0, fontSize: '11px', color: '#9ca3af' }}>{moeda(t.f30)}</p>
+                            </div>
+                          </div>
+                          <span style={{ display: 'inline-block', fontSize: '11px', fontWeight: '700', padding: '3px 9px', borderRadius: '20px', background: corLabel.bg, color: corLabel.text }}>
+                            {label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── ABA DIAGNÓSTICO ────────────────────────────────── */}
+        {aba === 'diagnostico' && (
+          <DiagnosticoTab
+            todosClientes={todosClientes}
+            carregandoClientes={carregandoClientes}
+            vendedorNome={nome}
+            diagCliente={diagCliente}
+            setDiagCliente={setDiagCliente}
+            diagModo={diagModo}
+            setDiagModo={setDiagModo}
+            diagArquivos={diagArquivos}
+            setDiagArquivos={setDiagArquivos}
+            diagPreviews={diagPreviews}
+            setDiagPreviews={setDiagPreviews}
+            diagUrl={diagUrl}
+            setDiagUrl={setDiagUrl}
+            diagAnalisando={diagAnalisando}
+            setDiagAnalisando={setDiagAnalisando}
+            diagResultado={diagResultado}
+            setDiagResultado={setDiagResultado}
+            diagErro={diagErro}
+            setDiagErro={setDiagErro}
+          />
+        )}
+
+      {/* ── Modal: Aniversário do comprador ────────────────── */}
+      {modalAniversario && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div style={{ background: '#fff', borderRadius: '16px', padding: '24px', width: '100%', maxWidth: '460px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
+            <h3 style={{ margin: '0 0 2px', fontSize: '17px', fontWeight: '800' }}>🎂 Aniversário do Comprador</h3>
+            <p style={{ margin: '0 0 18px', fontSize: '13px', color: '#6b7280' }}>{modalAniversario.nome}</p>
+
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
+              Data de aniversário do comprador
+            </label>
+            <input
+              type="date"
+              value={dataAniversario}
+              onChange={e => setDataAniversario(e.target.value)}
+              style={{ width: '100%', padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '14px', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', marginBottom: '18px' }}
+            />
+
+            <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '10px', padding: '12px 14px', marginBottom: '20px' }}>
+              <p style={{ margin: '0 0 6px', fontSize: '12px', fontWeight: '800', color: '#92400e' }}>📋 Como cadastrar o contato</p>
+              <p style={{ margin: 0, fontSize: '12px', color: '#78350f', lineHeight: '1.6' }}>
+                No <strong>Conta Azul</strong>, acesse o cadastro do cliente → aba <strong>"Outros Contatos"</strong>:
               </p>
-              <span style={{ fontSize: '12px', color: '#9ca3af' }}>
-                📅 Atualiza toda segunda · próx. {proximaSegunda()}
-              </span>
+              <ul style={{ margin: '6px 0 0', paddingLeft: '18px', fontSize: '12px', color: '#78350f', lineHeight: '1.8' }}>
+                <li><strong>Pessoa de contato</strong> — nome do comprador</li>
+                <li><strong>Telefone celular</strong> — número para contato</li>
+              </ul>
             </div>
 
-            {lideres === null ? (
-              <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', margin: '16px 0' }}>⏳ Carregando...</p>
-            ) : lideres.length === 0 ? (
-              <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px', margin: '16px 0' }}>Sem dados no período.</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {lideres.map((l, i) => {
-                  const isMe       = normalizarVendedor(l.destaqueVendedor) === normalizarVendedor(nome);
-                  const meuPct     = l.pctPorVendedor?.[nome] ?? null;
-                  const diff       = meuPct !== null ? l.destaquePercent - meuPct : null;
-                  const temInsight = diff !== null && diff > 15 && !isMe;
-                  const ordinal    = ['1º','2º','3º','4º','5º','6º','7º','8º','9º','10º'][i] || `${i+1}º`;
-                  const corOrd     = i === 0 ? '#d97706' : i === 1 ? '#6b7280' : i === 2 ? '#b45309' : '#9ca3af';
-                  return (
-                    <div
-                      key={l.categoria}
-                      style={{
-                        borderRadius: '10px',
-                        padding: '12px 14px',
-                        border: `1px solid ${temInsight ? '#fde68a' : isMe ? '#bfdbfe' : '#f0f0f0'}`,
-                        background: temInsight ? '#fefce8' : isMe ? '#eff6ff' : '#fff',
-                      }}
-                    >
-                      {/* Linha 1: posição + categoria + total */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-                          <span style={{ fontSize: '13px', fontWeight: '800', color: corOrd }}>{ordinal}</span>
-                          <span style={{ fontSize: '14px', fontWeight: '700', color: '#111827' }}>{l.categoria}</span>
-                        </div>
-                        <span style={{ fontSize: '12px', color: '#6b7280', fontWeight: '500' }}>{moeda(l.totalFat)}</span>
-                      </div>
-                      {/* Linha 2: destaque */}
-                      <div style={{ fontSize: '12px', color: isMe ? '#1d4ed8' : '#6b7280', marginBottom: temInsight || isMe ? '8px' : '0' }}>
-                        {isMe ? '👤 Você é o destaque' : normalizarVendedor(l.destaqueVendedor || '—')}
-                        {' · '}{l.destaquePercent.toFixed(1)}% das vendas dele
-                        {meuPct !== null && !isMe && <span style={{ color: '#9ca3af' }}> · você: {meuPct.toFixed(1)}%</span>}
-                      </div>
-                      {/* Insight */}
-                      {temInsight && (
-                        <div style={{ background: '#fef3c7', borderRadius: '7px', padding: '8px 10px' }}>
-                          <p style={{ margin: 0, fontSize: '12px', fontWeight: '700', color: '#92400e' }}>🚀 Oportunidade!</p>
-                          <p style={{ margin: '3px 0 0', fontSize: '12px', color: '#78350f', lineHeight: '1.4' }}>
-                            {normalizarVendedor(l.destaqueVendedor)} faz {l.destaquePercent.toFixed(1)}% nessa categoria, você faz {meuPct.toFixed(1)}%.
-                          </p>
-                        </div>
-                      )}
-                      {isMe && (
-                        <span style={{ fontSize: '12px', color: '#16a34a', fontWeight: '700' }}>✅ Você é o destaque!</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button onClick={() => { setModalAniversario(null); setDataAniversario(''); }} style={{ padding: '9px 18px', border: '1px solid #e5e7eb', borderRadius: '8px', background: '#fff', cursor: 'pointer', fontSize: '13px' }}>
+                Cancelar
+              </button>
+              <button
+                onClick={salvarAniversario}
+                disabled={salvandoAniversario || !dataAniversario}
+                style={{ padding: '9px 18px', background: '#d97706', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: '700', opacity: salvandoAniversario || !dataAniversario ? 0.5 : 1 }}
+              >
+                {salvandoAniversario ? 'Salvando...' : '✓ Salvar'}
+              </button>
+            </div>
           </div>
-        )}
+        </div>
+      )}
 
       </main>
     </div>
@@ -1558,8 +2778,8 @@ export default function VendedorDashboard({ vendedorNome, mesInicial, anoInicial
 const styles = {
   page: { minHeight: '100vh', background: '#f3f4f6', fontFamily: 'Inter, sans-serif' },
   header: { background: '#0f3460', color: '#fff', padding: '0 20px', paddingBottom: 0 },
-  abas: { maxWidth: '960px', margin: '0 auto', display: 'flex', gap: '4px', paddingTop: '8px' },
-  abaBtn: { background: 'none', border: 'none', color: '#fff', padding: '8px 16px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', fontFamily: 'inherit', borderRadius: '6px 6px 0 0', transition: 'opacity 0.15s' },
+  abas: { maxWidth: '960px', margin: '0 auto', display: 'flex', gap: '4px', paddingTop: '8px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', msOverflowStyle: 'none' },
+  abaBtn: { background: 'none', border: 'none', color: '#fff', padding: '8px 14px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', fontFamily: 'inherit', borderRadius: '6px 6px 0 0', transition: 'opacity 0.15s', whiteSpace: 'nowrap', flexShrink: 0 },
   headerInner: { maxWidth: '960px', margin: '0 auto', padding: '16px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
   headerLeft: { display: 'flex', alignItems: 'center', gap: '12px' },
   headerTitle: { margin: 0, fontSize: '20px', fontWeight: '700' },

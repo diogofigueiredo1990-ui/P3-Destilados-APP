@@ -38,6 +38,7 @@ export default function Login() {
           <span style={styles.logoIcon}>🥃</span>
           <h1 style={styles.logoText}>P3 Destilados</h1>
         </div>
+        <p style={styles.slogan}>Selecionamos os melhores insumos para o seu Restaurante</p>
         <p style={styles.subtitle}>Faça login para ver seu extrato</p>
 
         <form onSubmit={handleSubmit} style={styles.form}>
@@ -107,6 +108,13 @@ const styles = {
     fontWeight: '700',
     color: '#1a1a2e',
     margin: 0,
+  },
+  slogan: {
+    color: '#0f3460',
+    fontSize: '13px',
+    fontStyle: 'italic',
+    margin: '0 0 14px',
+    fontWeight: '500',
   },
   subtitle: {
     color: '#6b7280',

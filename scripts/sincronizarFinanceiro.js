@@ -8,7 +8,7 @@ var SHEET_FINANCEIRO = "Financeiro";
 var FIREBASE_COLLECTION_FIN = "financeiro";
 
 // Índices das colunas da aba Financeiro (começa em 0)
-// A=0  B=1  C=2  D=3  E=4  F=5  G=6  H=7  I=8  J=9  K=10  L=11  M=12
+// A=0  B=1  C=2  D=3  E=4  F=5  G=6  H=7  I=8  J=9  K=10  L=11  M=12  N=13
 var IDX_ESTADO     = 0;
 var IDX_CONTAAZUL  = 1;
 var IDX_NUMVENDA   = 2;
@@ -22,6 +22,7 @@ var IDX_VALOR_PAGO = 9;
 var IDX_EM_ABERTO  = 10;
 var IDX_DIAS_ATR   = 11;
 var IDX_CHAVE      = 12;
+var IDX_COM_BLOQ   = 13; // N — Comissão Bloqueada
 
 function sincronizarFinanceiro() {
   const lock = LockService.getScriptLock();
@@ -77,9 +78,10 @@ function sincronizarFinanceiro() {
           ? Utilities.formatDate(vencimento, "America/Sao_Paulo", "yyyy-MM-dd")
           : String(vencimento ?? ""),
         status:         String(linha[IDX_STATUS]     ?? ""),
-        valorPago:      typeof linha[IDX_VALOR_PAGO] === "number" ? linha[IDX_VALOR_PAGO] : 0,
-        valorEmAberto:  typeof linha[IDX_EM_ABERTO]  === "number" ? linha[IDX_EM_ABERTO]  : 0,
-        diasAtraso:     typeof linha[IDX_DIAS_ATR]   === "number" ? linha[IDX_DIAS_ATR]   : 0,
+        valorPago:          typeof linha[IDX_VALOR_PAGO] === "number" ? linha[IDX_VALOR_PAGO] : 0,
+        valorEmAberto:      typeof linha[IDX_EM_ABERTO]  === "number" ? linha[IDX_EM_ABERTO]  : 0,
+        diasAtraso:         typeof linha[IDX_DIAS_ATR]   === "number" ? linha[IDX_DIAS_ATR]   : 0,
+        comissaoBloqueada:  typeof linha[IDX_COM_BLOQ]   === "number" ? linha[IDX_COM_BLOQ]   : 0,
       });
     }
 
@@ -103,16 +105,22 @@ function sincronizarFinanceiro() {
         statusGeral = "EM_ABERTO";
       }
 
+      // Soma comissaoBloqueada dos boletos ATRASADOS
+      const comissaoBloqueadaTotal = doc.boletos
+        .filter(b => b.status === "ATRASADO")
+        .reduce((s, b) => s + b.comissaoBloqueada, 0);
+
       const boletosFirestore = doc.boletos.map(b => ({
         mapValue: {
           fields: {
-            valorOriginal:  { doubleValue: b.valorOriginal },
-            juros:          { doubleValue: b.juros },
-            dataVencimento: { stringValue: b.dataVencimento },
-            status:         { stringValue: b.status },
-            valorPago:      { doubleValue: b.valorPago },
-            valorEmAberto:  { doubleValue: b.valorEmAberto },
-            diasAtraso:     { doubleValue: b.diasAtraso },
+            valorOriginal:     { doubleValue: b.valorOriginal },
+            juros:             { doubleValue: b.juros },
+            dataVencimento:    { stringValue: b.dataVencimento },
+            status:            { stringValue: b.status },
+            valorPago:         { doubleValue: b.valorPago },
+            valorEmAberto:     { doubleValue: b.valorEmAberto },
+            diasAtraso:        { doubleValue: b.diasAtraso },
+            comissaoBloqueada: { doubleValue: b.comissaoBloqueada },
           }
         }
       }));
@@ -122,13 +130,14 @@ function sincronizarFinanceiro() {
           name: "projects/" + FIREBASE_PROJECT_ID + "/databases/(default)/documents/"
                 + FIREBASE_COLLECTION_FIN + "/" + encodeURIComponent(docId),
           fields: {
-            docId:        { stringValue: docId },
-            contaAzul:    { stringValue: doc.contaAzul },
-            numeroVenda:  { stringValue: doc.numeroVenda },
-            estado:       { stringValue: doc.estado },
-            cliente:      { stringValue: doc.cliente },
-            statusGeral:  { stringValue: statusGeral },
-            boletos:      { arrayValue: { values: boletosFirestore } },
+            docId:              { stringValue: docId },
+            contaAzul:          { stringValue: doc.contaAzul },
+            numeroVenda:        { stringValue: doc.numeroVenda },
+            estado:             { stringValue: doc.estado },
+            cliente:            { stringValue: doc.cliente },
+            statusGeral:        { stringValue: statusGeral },
+            comissaoBloqueada:  { doubleValue: comissaoBloqueadaTotal },
+            boletos:            { arrayValue: { values: boletosFirestore } },
           }
         }
       });

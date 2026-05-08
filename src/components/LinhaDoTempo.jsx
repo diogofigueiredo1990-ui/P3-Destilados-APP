@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { collection, query, where, getDocs, getDoc, doc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { useState, useEffect, memo, useCallback, useMemo } from 'react';
+import { collection, query, where, getDocs, getDocsFromServer, getDoc, doc, addDoc, deleteDoc, serverTimestamp, documentId } from 'firebase/firestore';
 import { hojeISO, dataParaISO } from '../utils/data';
 import { db } from '../firebase/config';
 
@@ -157,8 +157,9 @@ function agruparPorCliente(itens) {
   const mapa = {};
   for (const item of itens) {
     const key = item.cliente || '(sem cliente)';
-    if (!mapa[key]) mapa[key] = { cliente: key, tipo: item.tipo, produtos: [] };
+    if (!mapa[key]) mapa[key] = { cliente: key, tipo: item.tipo, produtos: [], docIds: [] };
     mapa[key].produtos.push(item);
+    if (item.id) mapa[key].docIds.push(item.id);
   }
   return Object.values(mapa);
 }
@@ -169,9 +170,10 @@ function normalizarNome(n) {
   return String(n || '').replace(/\s+[A-Z]{2}$/, '').trim();
 }
 
-export default function LinhaDoTempo({ vendedorNome }) {
+export default function LinhaDoTempo({ vendedorNome, nivelAtual }) {
   const [itens, setItens]           = useState([]);
   const [contatos, setContatos]     = useState({});
+  const [telefones, setTelefones]   = useState({});
   const [feitos, setFeitos]         = useState(new Set());
   const [expandidos, setExpandidos] = useState(new Set());
   const [carregando, setCarregando] = useState(true);
@@ -192,6 +194,15 @@ export default function LinhaDoTempo({ vendedorNome }) {
   const [aba, setAba]                       = useState('hoje'); // 'hoje' | 'agenda'
   const [agendamentosList, setAgendamentosList] = useState([]); // lista completa p/ Agenda
 
+  // modal de anotações
+  const [modalAnotacoes,     setModalAnotacoes]     = useState(null);  // { empresa }
+  const [anotacoesLista,     setAnotacoesLista]     = useState([]);
+  const [carregandoAnotacoes,setCarregandoAnotacoes]= useState(false);
+
+  // alertas de aniversário
+  const [anivHoje,    setAnivHoje]    = useState([]); // compradores com aniversário hoje
+  const [anivEm3Dias, setAnivEm3Dias] = useState([]); // aniversário em 3 dias
+
   // cache key compartilhado entre o useEffect e as funções de ação
   const slug     = vendedorNome ? vendedorNome.toLowerCase().replace(/\s+/g, '_') : '';
   const cacheKey = `p3_alertas_${slug}`;
@@ -201,12 +212,32 @@ export default function LinhaDoTempo({ vendedorNome }) {
     setCarregando(true);
     setErro(null);
 
-    getDocs(query(collection(db, 'pedidosDia'), where('vendedor', '==', vendedorNome)))
+    // Força busca no servidor (ignora cache offline do Firestore)
+    getDocsFromServer(query(collection(db, 'pedidosDia'), where('vendedor', '==', vendedorNome)))
       .then(async (snap) => {
         const hoje = hojeISO();
-        const lista = snap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .filter((d) => d.dataSugestao === hoje);
+
+        // Normaliza dataSugestao: aceita string ISO, Timestamp Firestore ou Date
+        // IMPORTANTE: usa dataParaISO (getters locais) e NÃO toISOString() para
+        // evitar bug de fuso: timestamps do final do dia em Brasília (UTC-3) têm
+        // hora UTC do dia seguinte e seriam incorretamente mapeados para "amanhã".
+        const normData = (v) => {
+          if (!v) return '';
+          if (typeof v === 'string') return v.slice(0, 10);
+          const d = v.toDate ? v.toDate() : (v instanceof Date ? v : null);
+          if (d) return dataParaISO(d); // usa hora local, igual a hojeISO()
+          return String(v).slice(0, 10);
+        };
+
+        const todos = snap.docs.map((d) => ({ id: d.id, ...d.data(), _dataISO: normData(d.data().dataSugestao) }));
+
+        // Deleta em background os docs de outros dias
+        todos
+          .filter((d) => d._dataISO !== hoje)
+          .forEach((d) => deleteDoc(doc(db, 'pedidosDia', d.id)).catch(() => {}));
+
+        // Exibe apenas os de hoje
+        const lista = todos.filter((d) => d._dataISO === hoje);
         setItens(lista);
 
         // Busca nomes de contato na coleção clientes
@@ -348,6 +379,59 @@ export default function LinhaDoTempo({ vendedorNome }) {
     carregarAlertas();
   }, [vendedorNome]);
 
+  // ── busca telefones pelo CNPJ dos alertas ────────────────────
+  useEffect(() => {
+    const alertas = alertasDiarios?.alertas || [];
+    const cnpjs = [...new Set(alertas.map((a) => a.cnpj).filter(Boolean))];
+    if (!cnpjs.length) return;
+
+    console.log('[WA] CNPJs dos alertas:', cnpjs.slice(0, 5));
+    async function fetchTelefones() {
+      const porCnpj = {}; // cnpj → telefone
+      for (let i = 0; i < cnpjs.length; i += 30) {
+        const lote = cnpjs.slice(i, i + 30);
+        const q = query(collection(db, 'clientes'), where('cnpj', 'in', lote));
+        const s = await getDocs(q);
+        s.docs.forEach((d) => {
+          const data = d.data();
+          if (data.cnpj && data.telefone)
+            porCnpj[data.cnpj] = String(data.telefone).replace(/\D/g, '');
+        });
+      }
+      // Remonta mapa keyed por empresa (para uso no AlertCard via alerta.empresa)
+      const mapa = {};
+      alertas.forEach((a) => {
+        if (a.cnpj && porCnpj[a.cnpj]) mapa[a.empresa] = porCnpj[a.cnpj];
+      });
+      console.log('[WA] porCnpj:', porCnpj);
+      console.log('[WA] mapa final:', mapa);
+      setTelefones(mapa);
+    }
+    fetchTelefones();
+  }, [alertasDiarios]);
+
+  // ── alertas de aniversário ───────────────────────────────
+  useEffect(() => {
+    if (!vendedorNome) return;
+    getDocs(query(collection(db, 'aniversarios'), where('vendedor', '==', vendedorNome)))
+      .then(snap => {
+        const hoje  = new Date();
+        const em3   = new Date(hoje); em3.setDate(em3.getDate() + 3);
+        const fmt   = (d) => `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        const hojeS = fmt(hoje);
+        const em3S  = fmt(em3);
+        const hoje_  = [], em3_ = [];
+        snap.docs.forEach(d => {
+          const r = d.data();
+          if (!r.diaAniversario) return;
+          if (r.diaAniversario === hojeS) hoje_.push(r);
+          else if (r.diaAniversario === em3S) em3_.push(r);
+        });
+        setAnivHoje(hoje_);
+        setAnivEm3Dias(em3_);
+      }).catch(console.error);
+  }, [vendedorNome]);
+
   // ── alertas computados (lidos direto de alertas_diarios) ─
 
   // Filtra desistências e agendamentos feitos na sessão atual
@@ -409,22 +493,58 @@ export default function LinhaDoTempo({ vendedorNome }) {
     finally { setSalvandoAcao(false); }
   }
 
-  const grupos     = agruparPorCliente(itens);
-  const pendentes  = grupos.filter((g) => !feitos.has(g.cliente));
-  const concluidos = grupos.filter((g) =>  feitos.has(g.cliente));
-  const pendentesAtivos = pendentes.filter((g) => g.produtos.some((p) => !parouDeUsar(p)));
-  const morrendo        = pendentes.filter((g) => g.produtos.every((p) =>  parouDeUsar(p)));
-  const primeiroNome    = vendedorNome ? vendedorNome.split(' ')[0] : '';
-  const totalPendencias = todosAlertas.length + pendentesAtivos.length;
+  const grupos     = useMemo(() => agruparPorCliente(itens), [itens]);
+  const pendentes  = useMemo(() => grupos.filter((g) => !feitos.has(g.cliente)), [grupos, feitos]);
+  const concluidos = useMemo(() => grupos.filter((g) =>  feitos.has(g.cliente)), [grupos, feitos]);
+  const pendentesAtivos = useMemo(() => pendentes.filter((g) => g.produtos.some((p) => !parouDeUsar(p))), [pendentes]);
+  const morrendo        = useMemo(() => pendentes.filter((g) => g.produtos.every((p) =>  parouDeUsar(p))), [pendentes]);
+  const primeiroNome    = useMemo(() => vendedorNome ? vendedorNome.split(' ')[0] : '', [vendedorNome]);
   const hoje            = hojeISO();
-  const agendFuturos    = agendamentosList.filter((a) => a.dataAgendada >= hoje).length;
+  const agendFuturos    = useMemo(() => agendamentosList.filter((a) => a.dataAgendada >= hoje).length, [agendamentosList, hoje]);
+  const totalPendencias = todosAlertas.length + pendentesAtivos.length;
 
-  function toggleFeito(c)    { setFeitos((p)    => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n; }); }
-  function toggleExpandir(c) { setExpandidos((p) => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n; }); }
+  const toggleFeito    = useCallback((c) => { setFeitos((p)    => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n; }); }, []);
+  const toggleExpandir = useCallback((c) => { setExpandidos((p) => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n; }); }, []);
 
   function chaveAlerta(a)       { return `${a.empresa}__${a.subTipo}`; }
   function toggleAlertaFeito(a) {
     setAlertasFeitos((p) => { const n = new Set(p); const k = chaveAlerta(a); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  }
+
+  async function abrirAnotacoes(alerta) {
+    setModalAnotacoes({ empresa: alerta.empresa });
+    setAnotacoesLista([]);
+    setCarregandoAnotacoes(true);
+    try {
+      const snap = await getDocs(query(
+        collection(db, 'relatorioVisitas'),
+        where(documentId(), '>=', slug + '_'),
+        where(documentId(), '<',  slug + '_'),
+      ));
+      const lista = snap.docs
+        .filter(d => {
+          const r = d.data();
+          return String(r.empresa || '').trim().toLowerCase() === alerta.empresa.trim().toLowerCase();
+        })
+        .map(d => {
+          const r = d.data();
+          // extrai data do docId (formato: slug_..._YYYY-MM-DD_HH-MM)
+          const dateMatch = d.id.match(/(\d{4}-\d{2}-\d{2})/);
+          const dataISO = dateMatch ? dateMatch[1] : '';
+          const dataFmt = dataISO ? dataISO.split('-').reverse().join('/') : '';
+          return {
+            id: d.id,
+            dataISO,
+            dataFmt,
+            anotacao: String(r.anotacoes || '').trim(),
+            satisfacao: r.satisfacao != null ? Number(r.satisfacao) : null,
+          };
+        })
+        .filter(a => a.anotacao)
+        .sort((a, b) => b.dataISO.localeCompare(a.dataISO));
+      setAnotacoesLista(lista);
+    } catch (err) { console.error(err); }
+    finally { setCarregandoAnotacoes(false); }
   }
 
   function renderAlertaGrid(alertas) {
@@ -438,10 +558,12 @@ export default function LinhaDoTempo({ vendedorNome }) {
               <AlertCard key={chaveAlerta(a)} alerta={a}
                 agendado={agendamentosMap[a.empresa] || null}
                 feito={false}
+                telefone={telefones[a.empresa] || ''}
                 onFeito={() => toggleAlertaFeito(a)}
                 onInformar={() => window.open(FORM_VISITA_URL, '_blank')}
                 onAgendar={() => { setModalAgendar(a); setDataAgend(''); }}
-                onDesistir={() => setModalDesistir(a)} />
+                onDesistir={() => setModalDesistir(a)}
+                onVerAnotacoes={() => abrirAnotacoes(a)} />
             ))}
           </div>
         )}
@@ -474,6 +596,11 @@ export default function LinhaDoTempo({ vendedorNome }) {
           <span style={{ ...s.pill, background: '#dcfce7', color: '#16a34a' }}>
             {concluidos.length} concluído{concluidos.length !== 1 ? 's' : ''}
           </span>
+          {nivelAtual != null && (
+            <span style={{ ...s.pill, background: '#dbeafe', color: '#1d4ed8' }}>
+              Nível {nivelAtual}
+            </span>
+          )}
         </div>
         {/* ── Abas Hoje / Agenda ── */}
         <div style={s.tabBar}>
@@ -490,6 +617,32 @@ export default function LinhaDoTempo({ vendedorNome }) {
       {/* ABA: HOJE                                          */}
       {/* ═══════════════════════════════════════════════════ */}
       {aba === 'hoje' && <>
+
+      {/* ── Alertas de Aniversário ───────────────────────── */}
+      {anivHoje.map(a => (
+        <div key={a.cnpj} style={{ background: '#fef3c7', border: '2px solid #fbbf24', borderRadius: '12px', padding: '14px 16px', marginTop: '10px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+          <span style={{ fontSize: '28px', lineHeight: 1 }}>🎂</span>
+          <div>
+            <p style={{ margin: '0 0 2px', fontWeight: '800', color: '#92400e', fontSize: '14px' }}>Aniversário hoje!</p>
+            <p style={{ margin: 0, fontSize: '13px', color: '#78350f' }}>
+              O comprador de <strong>{a.cliente}</strong> faz aniversário hoje.
+              Que tal mandar uma mensagem especial? 🥳
+            </p>
+          </div>
+        </div>
+      ))}
+      {anivEm3Dias.map(a => (
+        <div key={a.cnpj} style={{ background: '#ede9fe', border: '2px solid #a78bfa', borderRadius: '12px', padding: '14px 16px', marginTop: '10px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+          <span style={{ fontSize: '28px', lineHeight: 1 }}>🎁</span>
+          <div>
+            <p style={{ margin: '0 0 2px', fontWeight: '800', color: '#5b21b6', fontSize: '14px' }}>Aniversário em 3 dias!</p>
+            <p style={{ margin: 0, fontSize: '13px', color: '#4c1d95' }}>
+              O comprador de <strong>{a.cliente}</strong> faz aniversário em 3 dias ({a.diaAniversario.split('-').reverse().join('/')}).
+              Pense em um presente ou mensagem! 🎁
+            </p>
+          </div>
+        </div>
+      ))}
 
       {/* ── Pedidos realizados hoje ──────────────────────── */}
       {pedidosHoje.length > 0 && (
@@ -545,7 +698,8 @@ export default function LinhaDoTempo({ vendedorNome }) {
             <ClienteCard key={g.cliente} grupo={g} feito={false}
               contato={contatos[g.cliente] || ''} vendedor={primeiroNome}
               expandido={expandidos.has(g.cliente)}
-              onToggle={toggleFeito} onExpandir={toggleExpandir} />
+              onToggle={toggleFeito} onExpandir={toggleExpandir}
+            />
           ))}
         </div>
       )}
@@ -706,6 +860,60 @@ export default function LinhaDoTempo({ vendedorNome }) {
               <button onClick={confirmarAgendamento} disabled={!dataAgend || salvandoAcao} style={sa.btnConfirm}>
                 {salvandoAcao ? 'Salvando...' : '✓ Confirmar'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Anotações ──────────────────────────────── */}
+      {modalAnotacoes && (
+        <div style={sa.overlay} onClick={() => setModalAnotacoes(null)}>
+          <div style={{ ...sa.modal, maxWidth: '520px', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div>
+                <h3 style={{ margin: '0 0 2px', fontSize: '17px', fontWeight: '800' }}>✏️ Anotações de Visita</h3>
+                <p style={{ margin: 0, color: '#6b7280', fontSize: '13px' }}>{modalAnotacoes.empresa}</p>
+              </div>
+              <button onClick={() => setModalAnotacoes(null)}
+                style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#9ca3af', lineHeight: 1 }}>
+                ×
+              </button>
+            </div>
+
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {carregandoAnotacoes ? (
+                <p style={{ textAlign: 'center', color: '#9ca3af', padding: '32px 0' }}>Carregando anotações...</p>
+              ) : anotacoesLista.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 0' }}>
+                  <p style={{ fontSize: '32px', margin: '0 0 8px' }}>📋</p>
+                  <p style={{ color: '#9ca3af', fontSize: '14px', margin: 0 }}>Nenhuma anotação registrada para este cliente.</p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {anotacoesLista.map(a => (
+                    <div key={a.id} style={{ background: '#f9fafb', borderRadius: '10px', padding: '12px 14px', borderLeft: '3px solid #6366f1' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: '700', color: '#374151' }}>
+                          {a.dataFmt || '—'}
+                        </span>
+                        {a.satisfacao != null && !isNaN(a.satisfacao) && (
+                          <span style={{
+                            fontSize: '11px', fontWeight: '700', padding: '2px 8px', borderRadius: '20px',
+                            background: a.satisfacao >= 7 ? '#dcfce7' : a.satisfacao >= 5 ? '#fef3c7' : '#fee2e2',
+                            color:      a.satisfacao >= 7 ? '#15803d' : a.satisfacao >= 5 ? '#92400e' : '#b91c1c',
+                          }}>
+                            Satisfação: {a.satisfacao}
+                          </span>
+                        )}
+                      </div>
+                      <p style={{ margin: 0, fontSize: '13px', color: '#374151', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                        {a.anotacao}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -936,7 +1144,7 @@ function CardExpirado({ item, tipo, onInformar }) {
 
 // ── card de alerta (grade compacta) ──────────────────────
 
-function AlertCard({ alerta, agendado, feito, onFeito, onInformar, onAgendar, onDesistir }) {
+function AlertCard({ alerta, agendado, feito, telefone = '', onFeito, onInformar, onAgendar, onDesistir, onVerAnotacoes }) {
   const isVermelho  = alerta.nivel === 'vermelho';
   const isProspecto = alerta.tipo === 'prospecto';
   const isPedido    = alerta.subTipo === 'pedido';
@@ -1044,6 +1252,31 @@ function AlertCard({ alerta, agendado, feito, onFeito, onInformar, onAgendar, on
         />
         <span style={{ flex: 1 }} />
         {!feito && <>
+          {telefone && (() => {
+            const hora = new Date().getHours();
+            const saud = hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite';
+            const fone = telefone.startsWith('55') ? telefone : `55${telefone}`;
+            const msg  = encodeURIComponent(
+              `${saud}, ${alerta.empresa}, tudo bem? Que dia eu posso passar pra te fazer uma visita essa semana?`
+            );
+            return (
+              <a href={`https://wa.me/${fone}?text=${msg}`} target="_blank" rel="noopener noreferrer"
+                title="Enviar mensagem no WhatsApp"
+                style={{ ...sa.iconBtn, color: '#25d366', textDecoration: 'none' }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                </svg>
+              </a>
+            );
+          })()}
+          {onVerAnotacoes && (
+            <button onClick={onVerAnotacoes} title="Ver anotações de visita" style={sa.iconBtn}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </button>
+          )}
           <button onClick={onInformar} title="Informar visita" style={sa.iconBtn}>📝</button>
           <button onClick={onAgendar}  title={agendado ? 'Reagendar visita' : 'Agendar visita'} style={sa.iconBtn}>📅</button>
           <button onClick={onDesistir} title={`Desistir do ${isProspecto ? 'Prospecto' : 'Cliente'}`}
@@ -1056,7 +1289,7 @@ function AlertCard({ alerta, agendado, feito, onFeito, onInformar, onAgendar, on
 
 // ── 1ª camada: card do cliente ────────────────────────────
 
-function ClienteCard({ grupo, feito, expandido, contato, vendedor, onToggle, onExpandir }) {
+const ClienteCard = memo(function ClienteCard({ grupo, feito, expandido, contato, vendedor, onToggle, onExpandir }) {
   const tipo        = resolverTipo(grupo.tipo);
   const ativos      = grupo.produtos.filter((p) => !parouDeUsar(p));
   const parados     = grupo.produtos.filter((p) =>  parouDeUsar(p));
@@ -1249,11 +1482,11 @@ function ClienteCard({ grupo, feito, expandido, contato, vendedor, onToggle, onE
       )}
     </div>
   );
-}
+});
 
 // ── produto ativo ─────────────────────────────────────────
 
-function ProdutoAtivo({ p, zebra, ultimo }) {
+const ProdutoAtivo = memo(function ProdutoAtivo({ p, zebra, ultimo }) {
   const st = seta(p.tendencia);
   const ce = corEstoque(p.statusEstoque);
 
@@ -1277,11 +1510,11 @@ function ProdutoAtivo({ p, zebra, ultimo }) {
       <span style={{ fontSize: '16px', fontWeight: '800', color: st.cor, minWidth: '16px', textAlign: 'center' }}>{st.icon}</span>
     </div>
   );
-}
+});
 
 // ── produto parado (com checkbox + última compra) ─────────
 
-function ProdutoParado({ p, zebra, ultimo, selecionado, onToggle }) {
+const ProdutoParado = memo(function ProdutoParado({ p, zebra, ultimo, selecionado, onToggle }) {
   const ult = formatarData(p.ultimaCompra);
 
   return (
@@ -1304,7 +1537,7 @@ function ProdutoParado({ p, zebra, ultimo, selecionado, onToggle }) {
       )}
     </div>
   );
-}
+});
 
 // ── estilos ───────────────────────────────────────────────
 

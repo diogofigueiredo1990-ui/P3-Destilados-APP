@@ -43,11 +43,6 @@ export default function App() {
     <ErrorBoundary>
       <BrowserRouter>
         <AuthProvider>
-          <style>{`
-            * { box-sizing: border-box; }
-            body { margin: 0; font-family: 'Inter', sans-serif; }
-            @keyframes spin { to { transform: rotate(360deg); } }
-          `}</style>
           <Suspense fallback={<Spinner />}>
             <Routes>
               <Route path="/login" element={<Login />} />

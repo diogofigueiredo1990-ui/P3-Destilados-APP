@@ -139,69 +139,68 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
   const barMax = Math.max(crescAcent * 1.2, projecao * 1.05, fatAtual * 1.05, 1);
   const pct    = (v) => Math.min((v / barMax) * 100, 100);
 
+  // Cor do preenchimento sólido baseada na zona do realizado
+  const solidColor = fatAtual >= crescAcent ? '#0f3460'
+    : fatAtual >= crescMod ? '#16a34a'
+    : fatAtual >= estab    ? '#d97706'
+    : fatAtual >= queda    ? '#f59e0b'
+    : '#dc2626';
+
+  const markers = [
+    { v: queda,      label: 'Queda',        cor: '#dc2626' },
+    { v: estab,      label: 'Estabilidade', cor: '#d97706' },
+    { v: crescMod,   label: 'Meta ★',       cor: '#16a34a' },
+    { v: crescAcent, label: 'Acentuado',    cor: '#0f3460' },
+  ];
+
   // ── Algoritmo de espaçamento mínimo para evitar sobreposição de labels ──
-  function spreadLabels(items) {
-    const MIN_PX  = 24;           // px mínimo a partir de baixo
-    const MAX_PX  = BAR_H_PX - 24; // px máximo (não ultrapassar o topo)
-    const SPACING = 46;           // espaçamento mínimo entre centros dos labels (px)
+  function spreadLabels(items, spacing = 46) {
+    const MIN_PX = 24;
+    const MAX_PX = BAR_H_PX - 24;
 
     const sorted = [...items].sort((a, b) => a.idealPx - b.idealPx);
     const px = sorted.map(l => l.idealPx);
 
-    // Passagem para cima: cada label deve estar ao menos SPACING acima do anterior
-    for (let i = 1; i < px.length; i++) {
-      px[i] = Math.max(px[i], px[i - 1] + SPACING);
-    }
-    // Se o topo transbordou, desce tudo
+    for (let i = 1; i < px.length; i++) px[i] = Math.max(px[i], px[i - 1] + spacing);
     if (px[px.length - 1] > MAX_PX) {
       const shift = px[px.length - 1] - MAX_PX;
       for (let i = 0; i < px.length; i++) px[i] -= shift;
     }
-    // Se agora o fundo transbordou, sobe tudo
     if (px[0] < MIN_PX) {
       const shift = MIN_PX - px[0];
       for (let i = 0; i < px.length; i++) px[i] += shift;
     }
-    // Limita o topo individual (caso extremo)
-    for (let i = px.length - 1; i >= 0; i--) {
-      if (px[i] > MAX_PX) px[i] = MAX_PX;
-    }
-
+    for (let i = px.length - 1; i >= 0; i--) { if (px[i] > MAX_PX) px[i] = MAX_PX; }
     return sorted.map((l, i) => ({ ...l, placedPx: px[i] }));
   }
 
-  // Monta a lista de todos os labels
-  const labelItems = [
-    ...markers.map(m => ({
-      id: m.label,
-      idealPx: (pct(m.v) / 100) * BAR_H_PX,
-      cor: m.cor,
-      line1: m.label,
-      line2: moeda(m.v),
-      bold: false,
-    })),
-  ];
-  if (eMesAtual && projecao > 0) {
-    labelItems.push({
-      id: 'proj',
-      idealPx: Math.min((pct(projecao) / 100) * BAR_H_PX, BAR_H_PX * 0.97),
-      cor: '#1d4ed8',
-      line1: '🔵 Projeção',
-      line2: moeda(projecao),
-      bold: false,
-    });
-  }
-  if (fatAtual > 0) {
-    labelItems.push({
-      id: 'atual',
-      idealPx: Math.min((pct(fatAtual) / 100) * BAR_H_PX, BAR_H_PX * 0.97),
-      cor: solidColor,
-      line1: '▶ Você agora',
-      line2: moeda(fatAtual),
-      bold: true,
-    });
-  }
-  const placedLabels = spreadLabels(labelItems);
+  // Labels ESQUERDA e DIREITA
+  const placedLeft = spreadLabels(markers.map(m => ({
+    id: m.label,
+    idealPx: (pct(m.v) / 100) * BAR_H_PX,
+    cor: m.cor,
+    line1: m.label,
+    line2: moeda(m.v),
+  })));
+
+  const rightItems = [];
+  if (fatAtual > 0) rightItems.push({
+    id: 'atual',
+    idealPx: Math.min((pct(fatAtual) / 100) * BAR_H_PX, BAR_H_PX * 0.97),
+    cor: solidColor,
+    line1: '▶ Você agora',
+    line2: moeda(fatAtual),
+    bold: true,
+  });
+  if (eMesAtual && projecao > 0) rightItems.push({
+    id: 'proj',
+    idealPx: Math.min((pct(projecao) / 100) * BAR_H_PX, BAR_H_PX * 0.97),
+    cor: '#1d4ed8',
+    line1: '🔵 Projeção',
+    line2: moeda(projecao),
+    bold: false,
+  });
+  const placedRight = spreadLabels(rightItems);
 
   // Tendência baseada na projeção (mês atual) ou no realizado (mês passado)
   const refVal = eMesAtual && projecao > 0 ? projecao : fatAtual;
@@ -214,21 +213,7 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
   else if (refVal < mMA) tendencia = { label: 'Tendência de Crescimento Moderado',  cor: '#16a34a', bg: '#dcfce7' };
   else                   tendencia = { label: 'Tendência de Crescimento Acentuado', cor: '#0f3460', bg: '#dbeafe' };
 
-  // Cor do preenchimento sólido baseada na zona do realizado
-  const solidColor = fatAtual >= crescAcent ? '#0f3460'
-    : fatAtual >= crescMod ? '#16a34a'
-    : fatAtual >= estab    ? '#d97706'
-    : fatAtual >= queda    ? '#f59e0b'
-    : '#dc2626';
-
   const progresso = Math.min((fatAtual / crescMod) * 100, 100);
-
-  const markers = [
-    { v: queda,      label: 'Queda',        cor: '#dc2626' },
-    { v: estab,      label: 'Estabilidade', cor: '#d97706' },
-    { v: crescMod,   label: 'Meta ★',       cor: '#16a34a' },
-    { v: crescAcent, label: 'Acentuado',    cor: '#0f3460' },
-  ];
 
   return (
     <div style={s.card}>
@@ -250,60 +235,111 @@ export default function MetaCard({ vendedor, mes, ano, fatAtual }) {
         ))}
       </div>
 
-      {/* ── RÉGUA VERTICAL ─────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: '0', marginBottom: '24px', height: `${BAR_H_PX}px` }}>
+      {/* ── RÉGUA VERTICAL — layout 3 colunas ───────────────── */}
+      <div style={{ display: 'flex', marginBottom: '24px', height: `${BAR_H_PX}px` }}>
 
-        {/* Barra colorida (larga, à esquerda) */}
-        <div style={{ width: '52px', position: 'relative', flexShrink: 0, borderRadius: '10px', overflow: 'hidden', background: '#f3f4f6' }}>
-          {/* Zonas de cor — de baixo para cima */}
-          <div style={{ position: 'absolute', bottom: 0,                      left: 0, right: 0, height: `${pct(queda)}%`,                         background: '#fecaca' }} />
-          <div style={{ position: 'absolute', bottom: `${pct(queda)}%`,      left: 0, right: 0, height: `${pct(estab) - pct(queda)}%`,             background: '#fef08a' }} />
-          <div style={{ position: 'absolute', bottom: `${pct(estab)}%`,      left: 0, right: 0, height: `${pct(crescMod) - pct(estab)}%`,          background: '#bbf7d0' }} />
-          <div style={{ position: 'absolute', bottom: `${pct(crescMod)}%`,   left: 0, right: 0, height: `${pct(crescAcent) - pct(crescMod)}%`,     background: '#86efac' }} />
-          <div style={{ position: 'absolute', bottom: `${pct(crescAcent)}%`, left: 0, right: 0, height: `${100 - pct(crescAcent)}%`,               background: '#bfdbfe' }} />
-
-          {/* Preenchimento translúcido do realizado */}
-          {fatAtual > 0 && (
-            <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${pct(fatAtual)}%`, background: 'rgba(0,0,0,0.15)', zIndex: 1 }} />
-          )}
-
-          {/* Linhas dos marcadores de zona — posição exata */}
-          {markers.map((m) => (
-            <div key={m.label} style={{ position: 'absolute', bottom: `${pct(m.v)}%`, left: 0, right: 0, height: '3px', background: m.cor, zIndex: 2 }} />
-          ))}
-
-          {/* Linha da projeção */}
-          {eMesAtual && projecao > 0 && (
-            <div style={{ position: 'absolute', bottom: `${Math.min(pct(projecao), 98)}%`, left: 0, right: 0, height: '3px', background: '#1d4ed8', zIndex: 3 }} />
-          )}
-
-          {/* Linha do realizado (com brilho) */}
-          {fatAtual > 0 && (
-            <div style={{ position: 'absolute', bottom: `${Math.min(pct(fatAtual), 98)}%`, left: 0, right: 0, height: '4px', background: solidColor, zIndex: 4, boxShadow: `0 0 6px ${solidColor}` }} />
-          )}
-        </div>
-
-        {/* Labels à direita — posições ajustadas para não sobrepor */}
-        <div style={{ flex: 1, position: 'relative', paddingLeft: '14px' }}>
-          {placedLabels.map((l) => {
-            const bottomPct = (l.placedPx / BAR_H_PX) * 100;
-            const isBold = l.bold;
+        {/* ESQUERDA — labels das zonas com traço conector */}
+        <div style={{ width: '148px', position: 'relative', flexShrink: 0 }}>
+          {placedLeft.map((l) => {
+            const idealBottom = (pct(l.v) / 100) * BAR_H_PX; // posição real na régua (px)
+            const placedBottom = l.placedPx;
             return (
-              <div
-                key={l.id}
-                style={{
-                  position: 'absolute',
-                  bottom: `${bottomPct}%`,
-                  left: '14px', right: 0,
-                  transform: 'translateY(50%)',
-                  pointerEvents: 'none',
-                }}
-              >
-                <div style={{ fontSize: isBold ? '14px' : '13px', fontWeight: isBold ? '800' : '700', color: l.cor, lineHeight: 1.25 }}>{l.line1}</div>
-                <div style={{ fontSize: isBold ? '14px' : '13px', fontWeight: isBold ? '700' : '500', color: l.cor, lineHeight: 1.25 }}>{l.line2}</div>
+              <div key={l.id} style={{ position: 'absolute', bottom: `${(placedBottom / BAR_H_PX) * 100}%`, right: 0, transform: 'translateY(50%)', pointerEvents: 'none' }}>
+                {/* traço horizontal da label até a régua */}
+                <svg style={{ position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)', overflow: 'visible', pointerEvents: 'none' }} width="12" height="1">
+                  <line x1="0" y1="0.5"
+                    x2="12" y2={`${((idealBottom - placedBottom) / BAR_H_PX) * 100 * -1}%`}
+                    stroke={l.cor} strokeWidth="1.5" strokeDasharray="3,2" opacity="0.7" />
+                </svg>
+                <div style={{ textAlign: 'right', paddingRight: '14px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: '700', color: l.cor, lineHeight: 1.2 }}>{l.line1}</div>
+                  <div style={{ fontSize: '11px', fontWeight: '500', color: l.cor, lineHeight: 1.2, opacity: 0.85 }}>{l.line2}</div>
+                </div>
               </div>
             );
           })}
+        </div>
+
+        {/* CENTRO — régua estreita */}
+        <div style={{ width: '24px', position: 'relative', flexShrink: 0, borderRadius: '8px', overflow: 'visible' }}>
+          <div style={{ position: 'absolute', inset: 0, borderRadius: '8px', overflow: 'hidden', background: '#f3f4f6' }}>
+            {/* Zonas de cor — de baixo para cima */}
+            <div style={{ position: 'absolute', bottom: 0,                      left: 0, right: 0, height: `${pct(queda)}%`,                        background: '#fecaca' }} />
+            <div style={{ position: 'absolute', bottom: `${pct(queda)}%`,      left: 0, right: 0, height: `${pct(estab) - pct(queda)}%`,            background: '#fef08a' }} />
+            <div style={{ position: 'absolute', bottom: `${pct(estab)}%`,      left: 0, right: 0, height: `${pct(crescMod) - pct(estab)}%`,         background: '#bbf7d0' }} />
+            <div style={{ position: 'absolute', bottom: `${pct(crescMod)}%`,   left: 0, right: 0, height: `${pct(crescAcent) - pct(crescMod)}%`,    background: '#86efac' }} />
+            <div style={{ position: 'absolute', bottom: `${pct(crescAcent)}%`, left: 0, right: 0, height: `${100 - pct(crescAcent)}%`,              background: '#bfdbfe' }} />
+
+            {/* Preenchimento sólido translúcido do realizado */}
+            {fatAtual > 0 && (
+              <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${pct(fatAtual)}%`, background: 'rgba(0,0,0,0.13)', zIndex: 1 }} />
+            )}
+
+            {/* Linhas de zona */}
+            {markers.map((m) => (
+              <div key={m.label} style={{ position: 'absolute', bottom: `${pct(m.v)}%`, left: 0, right: 0, height: '2px', background: m.cor, zIndex: 2 }} />
+            ))}
+          </div>
+
+          {/* Marcador "Você agora" — seta lateral + linha (fora do overflow:hidden) */}
+          {fatAtual > 0 && (
+            <>
+              {/* linha que atravessa a régua */}
+              <div style={{
+                position: 'absolute', bottom: `${Math.min(pct(fatAtual), 98)}%`,
+                left: '-6px', right: '-6px', height: '4px',
+                background: solidColor, zIndex: 5,
+                borderRadius: '2px',
+                boxShadow: `0 0 8px ${solidColor}88`,
+              }} />
+              {/* triângulo indicador à esquerda */}
+              <div style={{
+                position: 'absolute', bottom: `${Math.min(pct(fatAtual), 98)}%`,
+                left: '-14px', transform: 'translateY(50%)',
+                width: 0, height: 0,
+                borderTop: '6px solid transparent',
+                borderBottom: '6px solid transparent',
+                borderLeft: `10px solid ${solidColor}`,
+                zIndex: 6,
+              }} />
+            </>
+          )}
+
+          {/* Linha da projeção na régua */}
+          {eMesAtual && projecao > 0 && (
+            <div style={{
+              position: 'absolute', bottom: `${Math.min(pct(projecao), 98)}%`,
+              left: 0, right: 0, height: '2px',
+              background: '#1d4ed8', zIndex: 4,
+              borderRadius: '1px',
+            }} />
+          )}
+        </div>
+
+        {/* DIREITA — linha tracejada de projeção + labels flutuantes */}
+        <div style={{ flex: 1, position: 'relative', marginLeft: '0' }}>
+          {/* Linha vertical tracejada da projeção */}
+          {eMesAtual && projecao > 0 && (
+            <div style={{
+              position: 'absolute', left: '16px', top: 0, bottom: 0,
+              borderLeft: '2px dashed #93c5fd',
+              opacity: 0.7, zIndex: 0,
+            }} />
+          )}
+
+          {/* Labels direita (Você agora + Projeção) */}
+          {placedRight.map((l) => (
+            <div key={l.id} style={{
+              position: 'absolute',
+              bottom: `${(l.placedPx / BAR_H_PX) * 100}%`,
+              left: '24px', right: 0,
+              transform: 'translateY(50%)',
+              pointerEvents: 'none',
+            }}>
+              <div style={{ fontSize: l.bold ? '14px' : '13px', fontWeight: l.bold ? '800' : '700', color: l.cor, lineHeight: 1.25 }}>{l.line1}</div>
+              <div style={{ fontSize: l.bold ? '13px' : '12px', fontWeight: l.bold ? '700' : '500', color: l.cor, lineHeight: 1.25 }}>{l.line2}</div>
+            </div>
+          ))}
         </div>
       </div>
 
