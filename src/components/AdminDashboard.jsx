@@ -143,33 +143,51 @@ export default function AdminDashboard() {
       setErroQuery(null);
       try {
         const prefixo = `${ano}-${String(mes).padStart(2, '0')}`;
-        const q = query(
-          collection(db, 'pedidos'),
-          where('dataVenda', '>=', `${prefixo}-01`),
-          where('dataVenda', '<=', `${prefixo}-31`)
-        );
-        const snap = await getDocs(q);
-        const pedidos = snap.docs.map((d) => d.data());
 
-        // Agrupa por vendedor (sem estado), somando todas as UFs
+        // Carrega pedidos do mês E todos os usuários vendedores em paralelo
+        const [snap, snapUsuarios] = await Promise.all([
+          getDocs(query(
+            collection(db, 'pedidos'),
+            where('dataVenda', '>=', `${prefixo}-01`),
+            where('dataVenda', '<=', `${prefixo}-31`)
+          )),
+          getDocs(query(
+            collection(db, 'usuarios'),
+            where('perfil', '==', 'vendedor'),
+          )),
+        ]);
+
+        // Inicializa o mapa com TODOS os vendedores ativos (mesmo sem vendas no mês)
         const mapa = {};
+        snapUsuarios.docs.forEach(d => {
+          const u = d.data();
+          if (u.ativo === false) return; // ignora desativados
+          const v = normalizarVendedor(u.vendedor);
+          if (!v) return;
+          mapa[v] = { vendedor: v, faturamento: 0, comissao: 0, vendas: new Set(), produtos: 0 };
+        });
+
+        // Soma pedidos do mês
+        const pedidos = snap.docs.map((d) => d.data());
         for (const p of pedidos) {
           const v = normalizarVendedor(p.vendedor) || 'Sem vendedor';
           if (!mapa[v]) mapa[v] = { vendedor: v, faturamento: 0, comissao: 0, vendas: new Set(), produtos: 0 };
           mapa[v].faturamento += Number(p.faturamento || 0);
           mapa[v].comissao    += Number(p.comissao    || 0);
           mapa[v].produtos    += 1;
-          // Extrai numeroVenda da chave para contar vendas únicas
           const chave = p.chave || '';
           const partes = chave.split('_');
           const vendaId = partes.length >= 2 ? `${p.contaAzul}_${partes[1]}` : chave;
           if (vendaId) mapa[v].vendas.add(vendaId);
         }
 
-        // Converte Set em número
+        // Converte Set em número e ordena: quem vendeu primeiro, depois sem vendas
         for (const v in mapa) mapa[v].vendas = mapa[v].vendas.size;
 
-        const lista = Object.values(mapa).sort((a, b) => b.comissao - a.comissao);
+        const lista = Object.values(mapa).sort((a, b) => {
+          if (b.comissao !== a.comissao) return b.comissao - a.comissao;
+          return a.vendedor.localeCompare(b.vendedor);
+        });
         setResumo(lista);
       } catch (err) {
         console.error('AdminDashboard query error:', err);
@@ -450,7 +468,7 @@ export default function AdminDashboard() {
             <p style={styles.headerSub}>Visão consolidada de todos os vendedores</p>
           </div>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <button onClick={() => { setAbaMetas(false); setAbaUsuarios(false); setAbaReuniao(false); }} style={{ ...styles.btnSair, background: !abaMetas && !abaUsuarios && !abaReuniao ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)' }}>Comissões</button>
+            <button onClick={() => { setAbaMetas(false); setAbaUsuarios(false); setAbaReuniao(false); }} style={{ ...styles.btnSair, background: !abaMetas && !abaUsuarios && !abaReuniao ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)' }}>Painel Geral</button>
             <button onClick={() => { setAbaMetas(true);  setAbaUsuarios(false); setAbaReuniao(false); }} style={{ ...styles.btnSair, background: abaMetas ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)' }}>🎯 Metas</button>
             <button onClick={() => { setAbaReuniao(true); setAbaMetas(false); setAbaUsuarios(false); }} style={{ ...styles.btnSair, background: abaReuniao ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)' }}>📋 Reunião</button>
             <button onClick={() => { setAbaUsuarios(true); setAbaMetas(false); setAbaReuniao(false); }} style={{ ...styles.btnSair, background: abaUsuarios ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)' }}>👥 Usuários</button>
@@ -546,14 +564,15 @@ export default function AdminDashboard() {
                 <span style={{ flex: 1 }}></span>
               </div>
               {resumo.map((r, idx) => (
-                <div key={r.vendedor} style={{ ...styles.tabelaRow, background: idx % 2 === 0 ? '#fff' : '#f9fafb' }}>
+                <div key={r.vendedor} style={{ ...styles.tabelaRow, background: idx % 2 === 0 ? '#fff' : '#f9fafb', opacity: r.faturamento === 0 ? 0.6 : 1 }}>
                   <div style={{ flex: 2 }}>
                     <span style={styles.nomeVendedor}>{r.vendedor}</span>
                     {r.estado && <span style={styles.estadoBadge}>{r.estado}</span>}
+                    {r.faturamento === 0 && <span style={{ fontSize: '10px', color: '#9ca3af', marginLeft: '6px' }}>sem vendas</span>}
                   </div>
-                  <span style={{ flex: 1, textAlign: 'right', color: '#6b7280', fontSize: '14px' }}>{r.vendas}</span>
-                  <span style={{ flex: 2, textAlign: 'right', fontSize: '14px', fontWeight: '500' }}>{moeda(r.faturamento)}</span>
-                  <span style={{ flex: 2, textAlign: 'right', fontSize: '15px', fontWeight: '700', color: '#16a34a' }}>{moeda(r.comissao)}</span>
+                  <span style={{ flex: 1, textAlign: 'right', color: '#6b7280', fontSize: '14px' }}>{r.vendas || '—'}</span>
+                  <span style={{ flex: 2, textAlign: 'right', fontSize: '14px', fontWeight: '500', color: r.faturamento === 0 ? '#9ca3af' : undefined }}>{r.faturamento === 0 ? '—' : moeda(r.faturamento)}</span>
+                  <span style={{ flex: 2, textAlign: 'right', fontSize: '15px', fontWeight: '700', color: r.comissao === 0 ? '#9ca3af' : '#16a34a' }}>{r.comissao === 0 ? '—' : moeda(r.comissao)}</span>
                   <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
                     <button onClick={() => setVendedorSelecionado(r.vendedor)} style={styles.btnDetalhe}>
                       Ver extrato
