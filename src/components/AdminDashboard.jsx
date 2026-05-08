@@ -144,8 +144,8 @@ export default function AdminDashboard() {
       try {
         const prefixo = `${ano}-${String(mes).padStart(2, '0')}`;
 
-        // Carrega pedidos do mês E todos os usuários vendedores em paralelo
-        const [snap, snapUsuarios] = await Promise.all([
+        // Carrega pedidos, usuários vendedores e metricasVendedores em paralelo
+        const [snap, snapUsuarios, snapMetricas] = await Promise.all([
           getDocs(query(
             collection(db, 'pedidos'),
             where('dataVenda', '>=', `${prefixo}-01`),
@@ -155,17 +155,24 @@ export default function AdminDashboard() {
             collection(db, 'usuarios'),
             where('perfil', '==', 'vendedor'),
           )),
+          getDocs(collection(db, 'metricasVendedores')),
         ]);
 
-        // Inicializa o mapa com TODOS os vendedores ativos (mesmo sem vendas no mês)
+        // Inicializa o mapa com TODOS os vendedores:
+        // 1) usuários com perfil=vendedor (ativos)
+        // 2) qualquer nome em metricasVendedores (cobre quem ainda não tem conta)
         const mapa = {};
+        const addVendedor = (nome) => {
+          const v = normalizarVendedor(nome);
+          if (!v) return;
+          if (!mapa[v]) mapa[v] = { vendedor: v, faturamento: 0, comissao: 0, vendas: new Set(), produtos: 0 };
+        };
         snapUsuarios.docs.forEach(d => {
           const u = d.data();
-          if (u.ativo === false) return; // ignora desativados
-          const v = normalizarVendedor(u.vendedor);
-          if (!v) return;
-          mapa[v] = { vendedor: v, faturamento: 0, comissao: 0, vendas: new Set(), produtos: 0 };
+          if (u.ativo === false) return;
+          addVendedor(u.vendedor);
         });
+        snapMetricas.docs.forEach(d => addVendedor(d.data().vendedor));
 
         // Soma pedidos do mês
         const pedidos = snap.docs.map((d) => d.data());
